@@ -3,11 +3,6 @@ Database interface.
 
 Responsibility:
     Defines the common interface for all database implementations.
-
-Does NOT:
-    - contain SQLite-specific logic;
-    - execute SQL queries;
-    - contain business logic.
 """
 
 from abc import ABC, abstractmethod
@@ -22,20 +17,24 @@ class DatabaseInterface(ABC):
         """Open database connection."""
 
     @abstractmethod
+    async def apply_schema(self) -> None:
+        """Apply database schema."""
+
+    @abstractmethod
     async def disconnect(self) -> None:
         """Close database connection."""
 
     @abstractmethod
     async def execute(self, query: str, *args: Any) -> None:
-        """Execute a query without returning rows."""
+        """Execute a query safely."""
 
     @abstractmethod
     async def fetch_one(self, query: str, *args: Any) -> Any:
-        """Return a single row."""
+        """Return a single row safely."""
 
     @abstractmethod
     async def fetch_all(self, query: str, *args: Any) -> list[Any]:
-        """Return all rows."""
+        """Return all rows safely."""
 
     @abstractmethod
     async def commit(self) -> None:
