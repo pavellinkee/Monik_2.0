@@ -136,16 +136,16 @@ class VeloraAggregator(AggregatorInterface):
             price_route
         )
 
-        gas_estimate = self._parse_optional_int(
-            price_route.get("gasCost")
+        gas_estimate = self._extract_gas_estimate(
+            price_route
         )
 
-        gas_cost_native = self._parse_optional_decimal(
-            price_route.get("gasCost")
+        gas_cost_native = self._extract_gas_cost(
+            price_route
         )
 
-        price_impact = self._parse_optional_decimal(
-            price_route.get("priceImpact")
+        price_impact = self._extract_price_impact(
+            price_route
         )
 
         route = self._extract_route(
@@ -205,24 +205,50 @@ class VeloraAggregator(AggregatorInterface):
         )
 
     @staticmethod
-    def _parse_optional_int(
-        value: Any,
+    def _extract_gas_estimate(
+        price_route: dict[str, Any],
     ) -> int | None:
-        """Convert an optional value to int."""
+        """Extract gas usage when it is explicitly provided."""
+
+        candidates = (
+            price_route.get("gas"),
+            price_route.get("gasEstimate"),
+        )
+
+        for value in candidates:
+            if value is None:
+                continue
+
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+
+        return None
+
+    @staticmethod
+    def _extract_gas_cost(
+        price_route: dict[str, Any],
+    ) -> Decimal | None:
+        """Extract gas cost when it is explicitly provided."""
+
+        value = price_route.get("gasCost")
 
         if value is None:
             return None
 
         try:
-            return int(value)
+            return Decimal(str(value))
         except (TypeError, ValueError):
             return None
 
     @staticmethod
-    def _parse_optional_decimal(
-        value: Any,
+    def _extract_price_impact(
+        price_route: dict[str, Any],
     ) -> Decimal | None:
-        """Convert an optional value to Decimal."""
+        """Extract price impact when it is provided."""
+
+        value = price_route.get("priceImpact")
 
         if value is None:
             return None
