@@ -2,7 +2,7 @@
 1inch aggregator adapter.
 
 Responsibility:
-    Communicates with the 1inch Swap API quote endpoint
+    Communicates with the 1inch Swap API
     and converts the response into our common Quote model.
 
 Does NOT:
@@ -23,18 +23,20 @@ from aggregators.errors import (
     AggregatorRequestError,
     AggregatorResponseError,
 )
-from aggregators.quote import Quote
 from aggregators.http_client import HttpClient
+from aggregators.quote import Quote
 
 
 class OneInchAggregator(AggregatorInterface):
     """1inch Swap API adapter."""
 
-    BASE_URL = "https://api.1inch.dev/swap/v6.0"
+    BASE_URL = "https://api.1inch.dev/swap/v6.1"
 
     NAME = "1inch"
 
     OFFICIAL_URL = "https://1inch.com"
+
+    NATIVE_TOKEN_DECIMALS = 18
 
     def __init__(
         self,
@@ -69,23 +71,34 @@ class OneInchAggregator(AggregatorInterface):
         """Request and normalize a 1inch quote."""
 
         if chain_id <= 0:
-            raise ValueError("chain_id must be greater than 0")
+            raise ValueError(
+                "chain_id must be greater than 0"
+            )
 
         if not token_in:
-            raise ValueError("token_in is required")
+            raise ValueError(
+                "token_in is required"
+            )
 
         if not token_out:
-            raise ValueError("token_out is required")
+            raise ValueError(
+                "token_out is required"
+            )
 
         if amount <= 0:
-            raise ValueError("amount must be greater than 0")
+            raise ValueError(
+                "amount must be greater than 0"
+            )
 
         url = (
-            f"{self.BASE_URL}/{chain_id}/quote"
+            f"{self.BASE_URL}"
+            f"/{chain_id}/quote"
         )
 
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": (
+                f"Bearer {self._api_key}"
+            ),
             "Accept": "application/json",
         }
 
@@ -122,18 +135,15 @@ class OneInchAggregator(AggregatorInterface):
                 "1inch returned a non-object response."
             )
 
-        try:
-            amount_out = int(data["dstAmount"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise AggregatorResponseError(
-                "1inch response does not contain a valid dstAmount."
-            ) from error
+        amount_out = self._extract_amount_out(
+            data
+        )
 
         gas_estimate = self._parse_optional_int(
             data.get("gas")
         )
 
-        gas_cost_native = self._parse_optional_decimal(
+        gas_cost_native = self._parse_gas_cost(
             data.get("gasCost")
         )
 
@@ -142,7 +152,7 @@ class OneInchAggregator(AggregatorInterface):
         )
 
         route = self._extract_route(
-            data.get("protocols")
+            data
         )
 
         timestamp = data.get(
@@ -168,15 +178,65 @@ class OneInchAggregator(AggregatorInterface):
         """
         Check whether the HTTP client is available.
 
-        This does not send an additional request to 1inch.
+        This does not send an additional request.
         """
         return self._http_client is not None
+
+    @staticmethod
+    def _extract_amount_out(
+        data: dict[str, Any],
+    ) -> int:
+        """Extract destination token amount."""
+
+        value = data.get("dstAmount")
+
+        if value is None:
+            raise AggregatorResponseError(
+                "1inch response does not contain "
+                "dstAmount."
+            )
+
+        try:
+            return int(value)
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "1inch returned an invalid dstAmount."
+            ) from error
+
+    @classmethod
+    def _parse_gas_cost(
+        cls,
+        value: Any,
+    ) -> Decimal | None:
+        """
+        Convert gas cost from wei to native token units.
+
+        1inch returns gasCost in the smallest native-token
+        denomination. EVM native tokens use 18 decimals.
+        """
+
+        if value is None:
+            return None
+
+        try:
+            gas_cost_wei = Decimal(str(value))
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "1inch returned an invalid gasCost."
+            ) from error
+
+        divisor = Decimal(
+            10 ** cls.NATIVE_TOKEN_DECIMALS
+        )
+
+        return gas_cost_wei / divisor
 
     @staticmethod
     def _parse_optional_int(
         value: Any,
     ) -> int | None:
         """Convert an optional value to int."""
+
         if value is None:
             return None
 
@@ -190,6 +250,7 @@ class OneInchAggregator(AggregatorInterface):
         value: Any,
     ) -> Decimal | None:
         """Convert an optional value to Decimal."""
+
         if value is None:
             return None
 
@@ -200,36 +261,43 @@ class OneInchAggregator(AggregatorInterface):
 
     @staticmethod
     def _extract_route(
-        protocols: Any,
+        data: dict[str, Any],
     ) -> str | None:
-        """Convert 1inch protocol data into a compact route string."""
-        if not protocols:
-            return None
+        """Extract a compact route description."""
 
-        if isinstance(protocols, str):
-            return protocols
+        protocols = data.get("protocols")
+
+        if protocols is None:
+            return None
 
         if not isinstance(protocols, list):
             return str(protocols)
 
-        parts: list[str] = []
+        names: list[str] = []
 
-        for item in protocols:
-            if isinstance(item, list):
-                for step in item:
-                    if isinstance(step, list):
-                        for part in step:
-                            if isinstance(part, dict):
-                                name = part.get(
-                                    "name"
-                                )
+        def collect_names(
+            value: Any,
+        ) -> None:
+            if isinstance(value, dict):
+                name = value.get("name")
 
-                                if name:
-                                    parts.append(
-                                        str(name)
-                                    )
+                if name:
+                    names.append(str(name))
 
-        if not parts:
-            return str(protocols)
+                for nested in value.values():
+                    collect_names(nested)
 
-        return " → ".join(dict.fromkeys(parts))
+            elif isinstance(value, list):
+                for item in value:
+                    collect_names(item)
+
+        collect_names(protocols)
+
+        if not names:
+            return None
+
+        unique_names = list(
+            dict.fromkeys(names)
+        )
+
+        return " → ".join(unique_names)
