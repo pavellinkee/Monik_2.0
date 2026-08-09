@@ -76,3 +76,35 @@ class HttpClient:
             )
 
             return status, data
+
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json: Any | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[int, Any]:
+        """
+        Perform an HTTP POST request.
+
+        Returns:
+            Tuple containing HTTP status code and decoded JSON.
+        """
+        if self._session is None:
+            raise RuntimeError(
+                "HttpClient must be started before use."
+            )
+
+        async with self._session.post(
+            url,
+            headers=headers,
+            json=json,
+            params=params,
+        ) as response:
+            status = response.status
+            data = await response.json(
+                content_type=None
+            )
+
+            return status, data
