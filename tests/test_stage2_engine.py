@@ -7,6 +7,7 @@ from aggregators.aggregator_interface import AggregatorInterface
 from aggregators.instance_registry import AggregatorInstanceRegistry
 from aggregators.queue_pool import AggregatorQueuePool
 from aggregators.quote import Quote
+from aggregators.rate_limiter import RateLimiter
 from core.stage2_engine import Stage2Engine
 from models.stage1_scan import Stage1ScanResult
 
@@ -49,7 +50,11 @@ class FakeAggregator(AggregatorInterface):
 
 def build_engine(*aggregators):
     instances = AggregatorInstanceRegistry()
-    queues = AggregatorQueuePool()
+
+    limiters: dict[
+        str,
+        RateLimiter,
+    ] = {}
 
     for aggregator in aggregators:
         instances.register(
@@ -57,9 +62,17 @@ def build_engine(*aggregators):
             aggregator,
         )
 
-        queues.register(
-            aggregator.name,
+        limiters[
+            aggregator.name
+        ] = RateLimiter(
+            initial_delay_seconds=0,
+            max_delay_seconds=1,
+            delay_multiplier=2,
         )
+
+    queues = AggregatorQueuePool.from_limiters(
+        limiters
+    )
 
     return AggregatorEngine(
         instances=instances,
