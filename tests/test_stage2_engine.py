@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from aggregators.aggregator_engine import AggregatorEngine
+from aggregators.aggregator_interface import AggregatorInterface
 from aggregators.instance_registry import AggregatorInstanceRegistry
 from aggregators.queue_pool import AggregatorQueuePool
 from aggregators.quote import Quote
@@ -10,7 +11,7 @@ from core.stage2_engine import Stage2Engine
 from models.stage1_scan import Stage1ScanResult
 
 
-class FakeAggregator:
+class FakeAggregator(AggregatorInterface):
     def __init__(
         self,
         aggregator_name: str,
@@ -123,7 +124,6 @@ async def test_stage2_builds_reverse_quote():
 
     assert result.stage1_quote.token_in == "0xUSDT"
     assert result.stage1_quote.token_out == "0xTOKEN"
-
     assert result.stage2_quote.token_in == "0xTOKEN"
     assert result.stage2_quote.token_out == "0xUSDT"
 
