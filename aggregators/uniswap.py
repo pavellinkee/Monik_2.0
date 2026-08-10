@@ -174,44 +174,13 @@ class UniswapAggregator(AggregatorInterface):
             "quote"
         )
 
-        if isinstance(
-            quote_data,
-            dict,
-        ):
-            amount_out = (
-                self._extract_amount_out(
-                    quote_data
+        if "quote" not in data:
+            if "amountOut" not in data:
+                raise AggregatorResponseError(
+                    "Uniswap response does not contain "
+                    "a valid quote object."
                 )
-            )
 
-            gas_estimate = (
-                self._extract_gas_estimate(
-                    data
-                )
-            )
-
-            gas_cost_native = (
-                self._extract_gas_cost(
-                    data
-                )
-            )
-
-            routing = data.get(
-                "routing"
-            )
-
-            route = (
-                str(routing)
-                if routing
-                else None
-            )
-
-            timestamp = data.get(
-                "requestId",
-                "",
-            )
-
-        else:
             amount_out = (
                 self._extract_legacy_amount_out(
                     data
@@ -242,6 +211,49 @@ class UniswapAggregator(AggregatorInterface):
 
             timestamp = data.get(
                 "timestamp",
+                "",
+            )
+
+        elif not isinstance(
+            quote_data,
+            dict,
+        ):
+            raise AggregatorResponseError(
+                "Uniswap response does not contain "
+                "a valid quote object."
+            )
+
+        else:
+            amount_out = (
+                self._extract_amount_out(
+                    quote_data
+                )
+            )
+
+            gas_estimate = (
+                self._extract_gas_estimate(
+                    data
+                )
+            )
+
+            gas_cost_native = (
+                self._extract_gas_cost(
+                    data
+                )
+            )
+
+            routing = data.get(
+                "routing"
+            )
+
+            route = (
+                str(routing)
+                if routing
+                else None
+            )
+
+            timestamp = data.get(
+                "requestId",
                 "",
             )
 
