@@ -9,6 +9,20 @@ import pytest
 from aggregators.rate_limiter import RateLimiter
 
 
+def create_limiter(
+    standard_interval: float = 1.2,
+    max_interval: float = 30.0,
+) -> RateLimiter:
+    """Create a test limiter."""
+
+    return RateLimiter(
+        standard_interval=standard_interval,
+        max_interval=max_interval,
+        backoff_multiplier=1.5,
+        requests_per_minute=50,
+    )
+
+
 def test_standard_interval_is_preserved():
     """Standard interval is stored correctly."""
 
@@ -17,9 +31,15 @@ def test_standard_interval_is_preserved():
         max_interval=30.0,
     )
 
-    assert limiter.standard_interval == 1.2
-    assert limiter.current_interval == 1.2
-    assert limiter.max_interval == 30.0
+    assert limiter.standard_interval == pytest.approx(
+        1.2
+    )
+    assert limiter.current_interval == pytest.approx(
+        1.2
+    )
+    assert limiter.max_interval == pytest.approx(
+        30.0
+    )
 
 
 def test_rpm_protection_cannot_be_bypassed():
@@ -51,7 +71,9 @@ def test_initial_interval_can_be_above_rpm_minimum():
         requests_per_minute=50,
     )
 
-    assert limiter.standard_interval == 2.0
+    assert limiter.standard_interval == pytest.approx(
+        2.0
+    )
 
 
 def test_rate_limit_increases_interval():
@@ -81,7 +103,9 @@ def test_rate_limit_backoff_is_capped():
 
     limiter.register_rate_limit()
 
-    assert limiter.current_interval == 12.0
+    assert limiter.current_interval == pytest.approx(
+        12.0
+    )
 
 
 def test_retry_after_is_respected():
@@ -97,7 +121,9 @@ def test_retry_after_is_respected():
         retry_after=10.0
     )
 
-    assert limiter.current_interval == 10.0
+    assert limiter.current_interval == pytest.approx(
+        10.0
+    )
 
 
 def test_retry_after_cannot_exceed_maximum():
@@ -113,7 +139,9 @@ def test_retry_after_cannot_exceed_maximum():
         retry_after=20.0
     )
 
-    assert limiter.current_interval == 5.0
+    assert limiter.current_interval == pytest.approx(
+        5.0
+    )
 
 
 def test_reset_restores_standard_interval():
@@ -127,11 +155,15 @@ def test_reset_restores_standard_interval():
 
     limiter.register_rate_limit()
 
-    assert limiter.current_interval == 1.8
+    assert limiter.current_interval == pytest.approx(
+        1.8
+    )
 
     limiter.reset()
 
-    assert limiter.current_interval == 1.2
+    assert limiter.current_interval == pytest.approx(
+        1.2
+    )
 
 
 def test_reset_clears_previous_request_timestamp():
@@ -205,7 +237,10 @@ def test_rpm_can_be_disabled_for_backward_compatibility():
     )
 
     assert limiter.requests_per_minute is None
-    assert limiter.standard_interval == 1.0
+
+    assert limiter.standard_interval == pytest.approx(
+        1.0
+    )
 
 
 @pytest.mark.asyncio
