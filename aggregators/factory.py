@@ -14,9 +14,8 @@ Does NOT:
     - implement Stage 1;
     - implement Stage 2.
 
-Configuration:
-    The factory receives configuration data from outside.
-    Secrets are never hardcoded here.
+Configuration may be supplied either as plain dictionaries
+or as Pydantic AggregatorConfig models.
 """
 
 from typing import Any
@@ -34,7 +33,7 @@ class AggregatorFactory:
     """
     Creates configured aggregator adapters.
 
-    Configuration format:
+    Supported configuration format:
 
         {
             "1inch": {
@@ -54,8 +53,11 @@ class AggregatorFactory:
             }
         }
 
-    API keys are supplied by the external configuration
-    and are never stored in source code.
+    The configuration values may also be Pydantic models
+    with a model_dump() method.
+
+    API keys are supplied by external configuration
+    and are never hardcoded here.
     """
 
     _BUILDERS = {
@@ -80,6 +82,10 @@ class AggregatorFactory:
 
         Disabled aggregators are skipped.
 
+        Configuration values can be either:
+            - dictionaries;
+            - Pydantic models exposing model_dump().
+
         Raises:
             TypeError:
                 If configuration has an invalid structure.
@@ -87,6 +93,7 @@ class AggregatorFactory:
             ValueError:
                 If an enabled aggregator has invalid configuration.
         """
+
         if not isinstance(config, dict):
             raise TypeError(
                 "Aggregator configuration must be a dictionary."
@@ -95,19 +102,16 @@ class AggregatorFactory:
         adapters: list[AggregatorInterface] = []
 
         for name, aggregator_config in config.items():
+
             if name not in self._BUILDERS:
                 raise ValueError(
                     f"Unknown aggregator: '{name}'."
                 )
 
-            if not isinstance(
+            aggregator_config = self._normalize_config(
+                name,
                 aggregator_config,
-                dict,
-            ):
-                raise TypeError(
-                    f"Configuration for '{name}' "
-                    "must be a dictionary."
-                )
+            )
 
             enabled = aggregator_config.get(
                 "enabled",
@@ -138,6 +142,40 @@ class AggregatorFactory:
 
         return AggregatorRegistry(
             adapters
+        )
+
+    @staticmethod
+    def _normalize_config(
+        aggregator_name: str,
+        config: Any,
+    ) -> dict[str, Any]:
+        """
+        Normalize aggregator configuration.
+
+        Supports both:
+            - plain dictionaries;
+            - Pydantic models with model_dump().
+        """
+
+        if isinstance(config, dict):
+            return config
+
+        model_dump = getattr(
+            config,
+            "model_dump",
+            None,
+        )
+
+        if callable(model_dump):
+            normalized = model_dump()
+
+            if isinstance(normalized, dict):
+                return normalized
+
+        raise TypeError(
+            f"Configuration for '{aggregator_name}' "
+            "must be a dictionary or a Pydantic "
+            "model with model_dump()."
         )
 
     def _build_oneinch(
@@ -197,6 +235,7 @@ class AggregatorFactory:
 
         Velora does not require an API key.
         """
+
         return VeloraAggregator(
             http_client=self._http_client,
         )
