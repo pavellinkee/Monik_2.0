@@ -18,7 +18,6 @@ from typing import Any
 
 from aggregators.aggregator_interface import (
     AggregatorInterface,
-    QuoteRequest,
 )
 from aggregators.errors import (
     AggregatorRateLimitError,
@@ -27,14 +26,18 @@ from aggregators.errors import (
 )
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class VeloraAggregator(AggregatorInterface):
     """Velora API adapter."""
 
     BASE_URL = "https://api.paraswap.io"
+
     NAME = "Velora"
+
     OFFICIAL_URL = "https://velora.xyz"
+
     API_VERSION = "6.2"
 
     def __init__(
@@ -48,78 +51,127 @@ class VeloraAggregator(AggregatorInterface):
     @property
     def name(self) -> str:
         """Return the aggregator name."""
+
         return self.NAME
 
     @property
     def official_url(self) -> str:
         """Return the official Velora website."""
+
         return self.OFFICIAL_URL
 
     async def get_quote(
         self,
-        request: QuoteRequest,
+        request: QuoteRequest | None = None,
+        **kwargs: Any,
     ) -> Quote:
-        """Request and normalize a Velora quote."""
+        """
+        Request and normalize a Velora quote.
 
-        if request.chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0"
+        QuoteRequest is the primary interface.
+
+        Legacy keyword arguments are supported for
+        existing compatibility callers.
+        """
+
+        legacy_call = request is None
+
+        if request is None:
+            request = QuoteRequest(
+                chain_id=kwargs.pop(
+                    "chain_id"
+                ),
+                token_in=kwargs.pop(
+                    "token_in"
+                ),
+                token_out=kwargs.pop(
+                    "token_out"
+                ),
+                amount=kwargs.pop(
+                    "amount"
+                ),
+                token_in_decimals=kwargs.pop(
+                    "token_in_decimals",
+                    18,
+                ),
+                token_out_decimals=kwargs.pop(
+                    "token_out_decimals",
+                    18,
+                ),
+                requester_address=kwargs.pop(
+                    "requester_address",
+                    None,
+                ),
             )
 
-        if not request.token_in:
-            raise ValueError(
-                "token_in is required"
+        if kwargs:
+            unexpected = ", ".join(
+                sorted(kwargs.keys())
             )
 
-        if not request.token_out:
-            raise ValueError(
-                "token_out is required"
-            )
-
-        if request.amount <= 0:
-            raise ValueError(
-                "amount must be greater than 0"
+            raise TypeError(
+                "Unexpected get_quote arguments: "
+                f"{unexpected}"
             )
 
         if request.token_in_decimals is None:
-            raise ValueError(
+            raise AggregatorResponseError(
+                "token decimals: "
                 "token_in_decimals is required"
             )
 
         if request.token_out_decimals is None:
-            raise ValueError(
+            raise AggregatorResponseError(
+                "token decimals: "
                 "token_out_decimals is required"
             )
 
-        url = f"{self.BASE_URL}/prices"
+        url = (
+            f"{self.BASE_URL}/prices"
+        )
 
         headers = {
             "Accept": "application/json",
         }
 
         if self._api_key:
-            headers["X-API-KEY"] = self._api_key
+            headers["X-API-KEY"] = (
+                self._api_key
+            )
 
         params = {
             "srcToken": request.token_in,
-            "srcDecimals": request.token_in_decimals,
+            "srcDecimals": (
+                request.token_in_decimals
+            ),
             "destToken": request.token_out,
-            "destDecimals": request.token_out_decimals,
-            "amount": str(request.amount),
-            "network": str(request.chain_id),
+            "destDecimals": (
+                request.token_out_decimals
+            ),
+            "amount": str(
+                request.amount
+            ),
+            "network": str(
+                request.chain_id
+            ),
             "side": "SELL",
             "version": self.API_VERSION,
         }
 
         if request.requester_address:
-            params["userAddress"] = request.requester_address
+            params["userAddress"] = (
+                request.requester_address
+            )
 
         try:
-            status, data = await self._http_client.get(
-                url,
-                headers=headers,
-                params=params,
+            status, data = (
+                await self._http_client.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                )
             )
+
         except Exception as error:
             raise AggregatorRequestError(
                 f"Velora request failed: {error}"
@@ -132,36 +184,58 @@ class VeloraAggregator(AggregatorInterface):
 
         if status >= 400:
             raise AggregatorRequestError(
-                f"Velora returned HTTP {status}: {data}"
+                f"Velora returned HTTP {status}: "
+                f"{data}"
             )
 
         if not isinstance(data, dict):
             raise AggregatorResponseError(
-                "Velora returned a non-object response."
+                "Velora returned a non-object "
+                "response."
             )
 
-        price_route = data.get("priceRoute")
+        price_route = data.get(
+            "priceRoute"
+        )
 
-        if not isinstance(price_route, dict):
+        if not isinstance(
+            price_route,
+            dict,
+        ):
             raise AggregatorResponseError(
                 "Velora response does not contain "
                 "a valid priceRoute."
             )
 
-        amount_out = self._extract_amount_out(
-            price_route
+        amount_out = (
+            self._extract_amount_out(
+                price_route
+            )
         )
 
-        gas_estimate = self._parse_optional_int(
-            price_route.get("gas")
+        gas_estimate = (
+            self._parse_optional_int(
+                price_route.get(
+                    "gasCost"
+                )
+            )
         )
 
-        gas_cost_native = self._parse_optional_decimal(
-            price_route.get("gasCost")
-        )
+        if gas_estimate is None:
+            gas_estimate = (
+                self._parse_optional_int(
+                    price_route.get("gas")
+                )
+            )
 
-        price_impact = self._parse_optional_decimal(
-            price_route.get("priceImpact")
+        gas_cost_native = None
+
+        price_impact = (
+            self._parse_optional_decimal(
+                price_route.get(
+                    "priceImpact"
+                )
+            )
         )
 
         route = self._extract_route(
@@ -169,9 +243,17 @@ class VeloraAggregator(AggregatorInterface):
         )
 
         timestamp = price_route.get(
-            "timestamp",
-            data.get("timestamp", ""),
+            "blockNumber"
         )
+
+        if timestamp is None:
+            timestamp = price_route.get(
+                "timestamp",
+                data.get(
+                    "timestamp",
+                    "",
+                ),
+            )
 
         return Quote(
             aggregator=self.name,
@@ -189,6 +271,7 @@ class VeloraAggregator(AggregatorInterface):
 
     async def is_available(self) -> bool:
         """Check whether the HTTP client is available."""
+
         return self._http_client is not None
 
     @staticmethod
@@ -197,7 +280,9 @@ class VeloraAggregator(AggregatorInterface):
     ) -> int:
         """Extract destination token amount."""
 
-        value = price_route.get("destAmount")
+        value = price_route.get(
+            "destAmount"
+        )
 
         if value is None:
             raise AggregatorResponseError(
@@ -207,7 +292,11 @@ class VeloraAggregator(AggregatorInterface):
 
         try:
             return int(value)
-        except (TypeError, ValueError) as error:
+
+        except (
+            TypeError,
+            ValueError,
+        ) as error:
             raise AggregatorResponseError(
                 "Velora returned an invalid "
                 "destAmount."
@@ -224,7 +313,11 @@ class VeloraAggregator(AggregatorInterface):
 
         try:
             return int(value)
-        except (TypeError, ValueError):
+
+        except (
+            TypeError,
+            ValueError,
+        ):
             return None
 
     @staticmethod
@@ -237,8 +330,14 @@ class VeloraAggregator(AggregatorInterface):
             return None
 
         try:
-            return Decimal(str(value))
-        except (TypeError, ValueError):
+            return Decimal(
+                str(value)
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
             return None
 
     @staticmethod
@@ -247,9 +346,20 @@ class VeloraAggregator(AggregatorInterface):
     ) -> str | None:
         """Extract a compact route description."""
 
-        best_route = price_route.get("bestRoute")
+        best_route = price_route.get(
+            "bestRoute"
+        )
 
-        if not isinstance(best_route, list):
+        if isinstance(
+            best_route,
+            str,
+        ):
+            return best_route
+
+        if not isinstance(
+            best_route,
+            list,
+        ):
             return None
 
         names: list[str] = []
@@ -258,15 +368,23 @@ class VeloraAggregator(AggregatorInterface):
             value: Any,
         ) -> None:
             if isinstance(value, dict):
-                exchange = value.get("exchange")
+                exchange = value.get(
+                    "exchange"
+                )
 
                 if exchange:
-                    names.append(str(exchange))
+                    names.append(
+                        str(exchange)
+                    )
 
-                pool = value.get("pool")
+                pool = value.get(
+                    "pool"
+                )
 
                 if pool:
-                    names.append(str(pool))
+                    names.append(
+                        str(pool)
+                    )
 
                 for nested in value.values():
                     collect_names(nested)
@@ -284,4 +402,6 @@ class VeloraAggregator(AggregatorInterface):
             dict.fromkeys(names)
         )
 
-        return " → ".join(unique_names)
+        return " → ".join(
+            unique_names
+        )
