@@ -1,124 +1,24 @@
 """
-Tests for AggregatorRegistry.
-
-These tests do not send real API requests.
+Tests for the aggregator registry.
 """
 
 import pytest
 
-from aggregators.registry import AggregatorRegistry
+from aggregators.aggregator_interface import AggregatorInterface
 from aggregators.oneinch import OneInchAggregator
+from aggregators.registry import (
+    AggregatorDefinition,
+    AggregatorRegistry,
+)
 from aggregators.uniswap import UniswapAggregator
 from aggregators.velora import VeloraAggregator
 from aggregators.zero_x import ZeroXAggregator
 
 
-class FakeHttpClient:
-    """Fake HTTP client for registry tests."""
+def test_registry_contains_all_supported_aggregators():
+    """All supported aggregators are registered."""
 
-    async def get(
-        self,
-        url,
-        *,
-        headers=None,
-        params=None,
-    ):
-        """Return an empty successful response."""
-        return 200, {}
-
-    async def post(
-        self,
-        url,
-        *,
-        headers=None,
-        json=None,
-        params=None,
-    ):
-        """Return an empty successful response."""
-        return 200, {}
-
-
-def create_adapters():
-    """Create all supported aggregator adapters."""
-
-    http_client = FakeHttpClient()
-
-    return [
-        OneInchAggregator(
-            http_client=http_client,
-            api_key="test-key",
-        ),
-        ZeroXAggregator(
-            http_client=http_client,
-            api_key="test-key",
-        ),
-        UniswapAggregator(
-            http_client=http_client,
-            api_key="test-key",
-        ),
-        VeloraAggregator(
-            http_client=http_client,
-        ),
-    ]
-
-
-def test_registry_registers_all_aggregators():
-    """Registry stores all supported aggregators."""
-
-    registry = AggregatorRegistry(
-        create_adapters()
-    )
-
-    assert len(registry) == 4
-
-    assert registry.contains("1inch")
-    assert registry.contains("0x")
-    assert registry.contains("Uniswap")
-    assert registry.contains("Velora")
-
-
-def test_registry_returns_aggregator_by_name():
-    """Registry returns the correct adapter."""
-
-    registry = AggregatorRegistry(
-        create_adapters()
-    )
-
-    oneinch = registry.get("1inch")
-    uniswap = registry.get("Uniswap")
-
-    assert oneinch.name == "1inch"
-    assert uniswap.name == "Uniswap"
-
-
-def test_registry_returns_all_aggregators():
-    """Registry returns all registered adapters."""
-
-    registry = AggregatorRegistry(
-        create_adapters()
-    )
-
-    aggregators = registry.all()
-
-    assert len(aggregators) == 4
-
-    assert {
-        aggregator.name
-        for aggregator in aggregators
-    } == {
-        "1inch",
-        "0x",
-        "Uniswap",
-        "Velora",
-    }
-
-
-def test_registry_returns_names():
-    """Registry returns registered names."""
-
-    registry = AggregatorRegistry(
-        create_adapters()
-    )
+    registry = AggregatorRegistry()
 
     assert registry.names() == (
         "1inch",
@@ -128,59 +28,189 @@ def test_registry_returns_names():
     )
 
 
-def test_registry_returns_official_url():
-    """Registry exposes official aggregator URLs."""
+@pytest.mark.parametrize(
+    "name, implementation, requires_api_key",
+    [
+        ("1inch", OneInchAggregator, True),
+        ("0x", ZeroXAggregator, True),
+        ("Uniswap", UniswapAggregator, True),
+        ("Velora", VeloraAggregator, False),
+    ],
+)
+def test_registry_definition(
+    name,
+    implementation,
+    requires_api_key,
+):
+    """Registered metadata is correct."""
 
-    registry = AggregatorRegistry(
-        create_adapters()
+    registry = AggregatorRegistry()
+
+    definition = registry.get(name)
+
+    assert isinstance(
+        definition,
+        AggregatorDefinition,
     )
 
+    assert definition.name == name
+    assert definition.implementation is implementation
     assert (
-        registry.official_url("1inch")
-        == "https://1inch.com"
-    )
-
-    assert (
-        registry.official_url("Uniswap")
-        == "https://app.uniswap.org"
-    )
-
-    assert (
-        registry.official_url("Velora")
-        == "https://velora.xyz"
+        definition.requires_api_key
+        is requires_api_key
     )
 
 
-def test_registry_rejects_duplicate_aggregator():
-    """Duplicate aggregator names are rejected."""
+def test_registry_contains():
+    """Registry correctly reports registered names."""
 
-    adapters = create_adapters()
+    registry = AggregatorRegistry()
 
-    registry = AggregatorRegistry(
-        adapters
-    )
+    assert registry.contains("1inch")
+    assert registry.contains("0x")
+    assert registry.contains("Uniswap")
+    assert registry.contains("Velora")
 
-    with pytest.raises(ValueError):
-        registry.register(
-            adapters[0]
-        )
+    assert not registry.contains("Unknown")
 
 
-def test_registry_rejects_unknown_aggregator():
-    """Unknown aggregator names raise KeyError."""
+def test_registry_get_unknown_raises_error():
+    """Unknown aggregator cannot be retrieved."""
 
-    registry = AggregatorRegistry(
-        create_adapters()
-    )
+    registry = AggregatorRegistry()
 
-    with pytest.raises(KeyError):
+    with pytest.raises(
+        KeyError,
+        match="Unknown aggregator",
+    ):
         registry.get("Unknown")
 
 
-def test_registry_rejects_invalid_object():
-    """Registry accepts only AggregatorInterface objects."""
+def test_registry_returns_all_definitions():
+    """Registry returns all definitions."""
 
-    registry = AggregatorRegistry([])
+    registry = AggregatorRegistry()
 
-    with pytest.raises(TypeError):
-        registry.register(object())
+    definitions = registry.all()
+
+    assert len(definitions) == 4
+
+    assert all(
+        isinstance(
+            definition,
+            AggregatorDefinition,
+        )
+        for definition in definitions
+    )
+
+
+def test_registry_custom_registration():
+    """Custom aggregator definitions can be registered."""
+
+    class FakeAggregator(
+        AggregatorInterface
+    ):
+        @property
+        def name(self) -> str:
+            return "Fake"
+
+        @property
+        def official_url(self) -> str:
+            return "https://example.com"
+
+        async def get_quote(
+            self,
+            request,
+        ):
+            raise NotImplementedError
+
+        async def is_available(self) -> bool:
+            return True
+
+    registry = AggregatorRegistry()
+
+    registry.register(
+        AggregatorDefinition(
+            name="Fake",
+            implementation=FakeAggregator,
+            requires_api_key=False,
+            official_url="https://example.com",
+        )
+    )
+
+    definition = registry.get("Fake")
+
+    assert definition.name == "Fake"
+    assert (
+        definition.implementation
+        is FakeAggregator
+    )
+    assert not definition.requires_api_key
+
+
+def test_registry_rejects_duplicate_registration():
+    """Duplicate aggregator names are rejected."""
+
+    registry = AggregatorRegistry()
+
+    existing = registry.get("1inch")
+
+    with pytest.raises(
+        ValueError,
+        match="already registered",
+    ):
+        registry.register(existing)
+
+
+def test_registry_rejects_invalid_definition():
+    """Registry rejects objects of the wrong type."""
+
+    registry = AggregatorRegistry()
+
+    with pytest.raises(
+        TypeError,
+        match="AggregatorDefinition",
+    ):
+        registry.register("invalid")
+
+
+def test_registry_rejects_empty_name():
+    """Empty aggregator names are rejected."""
+
+    registry = AggregatorRegistry()
+
+    definition = AggregatorDefinition(
+        name="   ",
+        implementation=OneInchAggregator,
+        requires_api_key=True,
+        official_url="https://1inch.com",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cannot be empty",
+    ):
+        registry.register(definition)
+
+
+def test_registry_remove():
+    """Registered aggregators can be removed."""
+
+    registry = AggregatorRegistry()
+
+    removed = registry.remove("Velora")
+
+    assert removed.name == "Velora"
+    assert not registry.contains("Velora")
+
+
+def test_registry_remove_unknown_raises_error():
+    """Removing an unknown aggregator raises an error."""
+
+    registry = AggregatorRegistry()
+
+    with pytest.raises(
+        KeyError,
+        match="Unknown aggregator",
+    ):
+        registry.remove("Unknown")
