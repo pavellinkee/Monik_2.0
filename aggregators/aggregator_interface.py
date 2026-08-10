@@ -19,7 +19,9 @@ Does NOT:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+
+from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class AggregatorInterface(ABC):
@@ -38,26 +40,13 @@ class AggregatorInterface(ABC):
     @abstractmethod
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
-    ) -> Any:
+        request: QuoteRequest,
+    ) -> Quote:
         """
-        Request a quote from the aggregator.
+        Request a normalized quote from the aggregator.
 
-        Args:
-            chain_id:
-                Blockchain network identifier.
-
-            token_in:
-                Address of the token being sold.
-
-            token_out:
-                Address of the token being received.
-
-            amount:
-                Amount of token_in in its smallest unit.
+        Aggregator-specific adapters decide which fields from
+        QuoteRequest are required by their API.
         """
 
     @abstractmethod
