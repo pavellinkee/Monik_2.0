@@ -1,5 +1,5 @@
 """
-Uniswap aggregator adapter.
+Uniswap Trading API aggregator adapter.
 
 Responsibility:
     Communicates with the Uniswap Trading API
@@ -25,16 +25,20 @@ from aggregators.errors import (
 )
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class UniswapAggregator(AggregatorInterface):
     """Uniswap Trading API adapter."""
 
-    BASE_URL = "https://trade-api.gateway.uniswap.org/v1"
+    BASE_URL = (
+        "https://trade-api.gateway.uniswap.org"
+        "/v1/quote"
+    )
 
     NAME = "Uniswap"
 
-    OFFICIAL_URL = "https://app.uniswap.org"
+    OFFICIAL_URL = "https://uniswap.org"
 
     def __init__(
         self,
@@ -61,52 +65,35 @@ class UniswapAggregator(AggregatorInterface):
 
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
+        request: QuoteRequest,
     ) -> Quote:
         """Request and normalize a Uniswap quote."""
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0"
+        if not request.requester_address:
+            raise AggregatorConfigurationError(
+                "Uniswap quote requires requester_address."
             )
-
-        if not token_in:
-            raise ValueError(
-                "token_in is required"
-            )
-
-        if not token_out:
-            raise ValueError(
-                "token_out is required"
-            )
-
-        if amount <= 0:
-            raise ValueError(
-                "amount must be greater than 0"
-            )
-
-        url = f"{self.BASE_URL}/quote"
 
         headers = {
             "x-api-key": self._api_key,
-            "Content-Type": "application/json",
             "Accept": "application/json",
+            "Content-Type": "application/json",
+            "x-universal-router-version": "2.0",
         }
 
         payload = {
             "type": "EXACT_INPUT",
-            "amount": str(amount),
-            "tokenIn": token_in,
-            "tokenOut": token_out,
-            "chainId": chain_id,
+            "amount": str(request.amount),
+            "tokenInChainId": request.chain_id,
+            "tokenOutChainId": request.chain_id,
+            "tokenIn": request.token_in,
+            "tokenOut": request.token_out,
+            "swapper": request.requester_address,
         }
 
         try:
             status, data = await self._http_client.post(
-                url,
+                self.BASE_URL,
                 headers=headers,
                 json=payload,
             )
@@ -131,8 +118,19 @@ class UniswapAggregator(AggregatorInterface):
                 "Uniswap returned a non-object response."
             )
 
+        quote_data = data.get("quote")
+
+        if not isinstance(
+            quote_data,
+            dict,
+        ):
+            raise AggregatorResponseError(
+                "Uniswap response does not contain "
+                "a valid quote object."
+            )
+
         amount_out = self._extract_amount_out(
-            data
+            quote_data
         )
 
         gas_estimate = self._extract_gas_estimate(
@@ -143,158 +141,163 @@ class UniswapAggregator(AggregatorInterface):
             data
         )
 
-        price_impact = self._extract_price_impact(
-            data
+        routing = data.get(
+            "routing"
         )
 
-        route = self._extract_route(
-            data
+        route = (
+            str(routing)
+            if routing
+            else None
         )
 
-        timestamp = data.get(
-            "timestamp",
+        request_id = data.get(
+            "requestId",
             "",
         )
 
         return Quote(
             aggregator=self.name,
-            chain_id=chain_id,
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount,
+            chain_id=request.chain_id,
+            token_in=request.token_in,
+            token_out=request.token_out,
+            amount_in=request.amount,
             amount_out=amount_out,
             gas_estimate=gas_estimate,
             gas_cost_native=gas_cost_native,
-            price_impact=price_impact,
+            price_impact=None,
             route=route,
-            timestamp=str(timestamp),
+            timestamp=str(request_id),
         )
 
     async def is_available(self) -> bool:
         """
         Check whether the HTTP client is available.
 
-        This does not send an additional API request.
+        This does not send an additional request.
         """
+
         return self._http_client is not None
 
     @staticmethod
     def _extract_amount_out(
-        data: dict[str, Any],
+        quote_data: dict[str, Any],
     ) -> int:
-        """Extract output token amount from the response."""
+        """Extract output amount from a Uniswap quote."""
 
-        candidates = (
-            data.get("amountOut"),
-            data.get("outputAmount"),
-            data.get("quote", {}).get("amountOut")
-            if isinstance(data.get("quote"), dict)
-            else None,
+        output = quote_data.get("output")
+
+        if isinstance(output, dict):
+            value = output.get("amount")
+
+            if value is not None:
+                try:
+                    return int(value)
+
+                except (TypeError, ValueError) as error:
+                    raise AggregatorResponseError(
+                        "Uniswap returned an invalid "
+                        "output amount."
+                    ) from error
+
+        order_info = quote_data.get(
+            "orderInfo"
         )
 
-        for value in candidates:
-            if value is None:
-                continue
+        if isinstance(
+            order_info,
+            dict,
+        ):
+            outputs = order_info.get(
+                "outputs"
+            )
 
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
+            if isinstance(
+                outputs,
+                list,
+            ) and outputs:
+
+                first_output = outputs[0]
+
+                if isinstance(
+                    first_output,
+                    dict,
+                ):
+                    value = first_output.get(
+                        "startAmount"
+                    )
+
+                    if value is not None:
+                        try:
+                            return int(value)
+
+                        except (
+                            TypeError,
+                            ValueError,
+                        ) as error:
+                            raise AggregatorResponseError(
+                                "Uniswap returned an invalid "
+                                "order output amount."
+                            ) from error
 
         raise AggregatorResponseError(
-            "Uniswap response does not contain a valid "
-            "output token amount."
+            "Uniswap response does not contain "
+            "an output amount."
         )
 
     @staticmethod
     def _extract_gas_estimate(
         data: dict[str, Any],
     ) -> int | None:
-        """Extract estimated gas usage."""
+        """Extract estimated gas units."""
 
-        candidates = (
-            data.get("gasEstimate"),
-            data.get("gas"),
-            data.get("quote", {}).get("gasEstimate")
-            if isinstance(data.get("quote"), dict)
-            else None,
+        permit_transaction = data.get(
+            "permitTransaction"
         )
 
-        for value in candidates:
-            if value is None:
-                continue
+        if not isinstance(
+            permit_transaction,
+            dict,
+        ):
+            return None
 
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
+        value = permit_transaction.get(
+            "gasLimit"
+        )
 
-        return None
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _extract_gas_cost(
         data: dict[str, Any],
     ) -> Decimal | None:
-        """Extract estimated gas cost."""
+        """
+        Extract total estimated gas cost.
 
-        candidates = (
-            data.get("gasCost"),
-            data.get("gasCostNative"),
-            data.get("quote", {}).get("gasCost")
-            if isinstance(data.get("quote"), dict)
-            else None,
+        Uniswap provides this value in the chain's base unit.
+        """
+
+        value = data.get(
+            "permitGasFee"
         )
 
-        for value in candidates:
-            if value is None:
-                continue
-
-            try:
-                return Decimal(str(value))
-            except (TypeError, ValueError):
-                continue
-
-        return None
-
-    @staticmethod
-    def _extract_price_impact(
-        data: dict[str, Any],
-    ) -> Decimal | None:
-        """Extract price impact."""
-
-        candidates = (
-            data.get("priceImpact"),
-            data.get("quote", {}).get("priceImpact")
-            if isinstance(data.get("quote"), dict)
-            else None,
-        )
-
-        for value in candidates:
-            if value is None:
-                continue
-
-            try:
-                return Decimal(str(value))
-            except (TypeError, ValueError):
-                continue
-
-        return None
-
-    @staticmethod
-    def _extract_route(
-        data: dict[str, Any],
-    ) -> str | None:
-        """Extract a compact route description."""
-
-        route = data.get("route")
-
-        if route is None:
-            route = data.get("routing")
-
-        if route is None:
+        if value is None:
             return None
 
-        if isinstance(route, str):
-            return route
+        try:
+            return Decimal(str(value)) / Decimal(
+                10 ** 18
+            )
 
-        return str(route)
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "Uniswap returned an invalid "
+                "permitGasFee."
+            ) from error
