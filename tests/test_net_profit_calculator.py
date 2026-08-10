@@ -4,7 +4,6 @@ import pytest
 
 from aggregators.quote import Quote
 from core.arbitrage_engine import ArbitrageEngine
-from core.gas_calculator import GasCalculator
 from core.net_profit_calculator import NetProfitCalculator
 from models.gas_cost import GasCost
 from models.net_profit import NetProfitResult
@@ -145,6 +144,7 @@ async def test_calculate_is_legacy_compatible():
     opportunity = await make_opportunity()
 
     calculator = NetProfitCalculator()
+
     gas_cost = make_gas_cost(
         total_gas_usdt=Decimal("9")
     )
@@ -191,5 +191,7 @@ async def test_rejects_different_chains():
     with pytest.raises(ValueError):
         calculator.calculate_opportunity(
             opportunity=opportunity,
-            gas_cost=make_gas_cost(chain_id=137),
+            gas_cost=make_gas_cost(
+                chain_id=137
+            ),
         )
