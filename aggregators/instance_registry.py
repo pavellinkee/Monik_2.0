@@ -18,7 +18,6 @@ This registry is intentionally separate from AggregatorRegistry.
 
 AggregatorRegistry:
     Stores static aggregator definitions.
-
 AggregatorInstanceRegistry:
     Stores runtime-created aggregator instances.
 """
@@ -120,6 +119,13 @@ class AggregatorInstanceRegistry:
 
     def names(self) -> tuple[str, ...]:
         """Return registered instance names."""
+
+        return tuple(
+            self._instances.keys()
+        )
+
+    def keys(self) -> tuple[str, ...]:
+        """Return registered instance names as dictionary-style keys."""
 
         return tuple(
             self._instances.keys()
