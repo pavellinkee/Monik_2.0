@@ -9,6 +9,9 @@ import pytest
 from aggregators.aggregator_engine import (
     AggregatorEngine,
 )
+from aggregators.aggregator_interface import (
+    AggregatorInterface,
+)
 from aggregators.instance_registry import (
     AggregatorInstanceRegistry,
 )
@@ -107,8 +110,11 @@ class LegacyTokenResolver:
         )
 
 
-class FakeAggregator:
-    """Fake aggregator compatible with AggregatorEngine."""
+class FakeAggregator(AggregatorInterface):
+    """
+    Fake aggregator compatible with the current
+    AggregatorInterface.
+    """
 
     def __init__(
         self,
@@ -152,7 +158,12 @@ class FakeAggregator:
 
 
 def build_aggregator_engine():
-    """Build an AggregatorEngine with fake aggregators."""
+    """
+    Build an AggregatorEngine with fake aggregators.
+
+    The test adapters implement the same interface as
+    production aggregators.
+    """
 
     instances = AggregatorInstanceRegistry()
 
@@ -171,9 +182,9 @@ def build_aggregator_engine():
         )
 
         limiters[name] = RateLimiter(
-            initial_delay_seconds=0,
-            max_delay_seconds=1,
-            delay_multiplier=2,
+            standard_interval=0,
+            max_interval=1,
+            backoff_multiplier=2,
         )
 
     queues = AggregatorQueuePool.from_limiters(
