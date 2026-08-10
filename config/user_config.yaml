@@ -1,0 +1,192 @@
+# ============================================================
+# Monik 2.0 - User Configuration
+# ============================================================
+#
+# IMPORTANT:
+# This file is a TEMPLATE.
+#
+# Copy it to:
+#
+#     config/user_config.yaml
+#
+# and put your personal API keys there.
+#
+# DO NOT commit user_config.yaml to GitHub.
+# ============================================================
+
+
+# ============================================================
+# STAGE 1
+# ============================================================
+
+stage1:
+
+  # Amount used for the initial opportunity scan.
+  #
+  # Default:
+  #     1000 USDT
+  #
+  # Can be changed by the user:
+  #     500
+  #     200
+  #     etc.
+  amount_usdt: 1000
+
+  # Minimum interval between the START of Stage 1 runs.
+  #
+  # Initial approved value:
+  #     10 minutes
+  base_interval_minutes: 10
+
+  # Maximum allowed interval between the START of Stage 1 runs.
+  #
+  # Initial configuration:
+  #     30 minutes
+  #
+  # The actual scheduling logic will later take
+  # Stage 2 execution time into account.
+  max_interval_minutes: 30
+
+
+# ============================================================
+# STAGE 2
+# ============================================================
+
+stage2:
+
+  # Enable Stage 2 opportunity verification.
+  enabled: true
+
+  # Maximum number of Stage 2 checks allowed to run
+  # simultaneously.
+  #
+  # The actual aggregator-specific concurrency rules
+  # will be implemented by the Stage 2 scheduler.
+  max_concurrent_checks: 1
+
+  # If two Stage 2 checks require the same aggregator,
+  # they must wait in that aggregator's queue.
+  same_aggregator_queue_enabled: true
+
+  # If Stage 2 checks use different aggregators,
+  # they may run in parallel.
+  different_aggregators_parallel: true
+
+  # Stage 2 always has priority over Stage 1
+  # when both require the same aggregator.
+  priority_over_stage1: true
+
+
+# ============================================================
+# AGGREGATORS
+# ============================================================
+#
+# Each aggregator has its own settings.
+#
+# API keys:
+#
+#     1inch    -> required
+#     0x       -> required
+#     Uniswap  -> required
+#     Velora   -> not required
+#
+# IMPORTANT:
+# Actual rate-limit values should be configured according
+# to the limits applicable to your API account.
+# ============================================================
+
+aggregators:
+
+  1inch:
+
+    enabled: true
+
+    # Put your personal 1inch API key here.
+    api_key: "PUT_YOUR_1INCH_API_KEY_HERE"
+
+    rate_limit:
+
+      # Keep this below the configured account/API limit.
+      #
+      # Our initial scanner policy is intentionally
+      # conservative.
+      requests_per_minute: 50
+
+      # Initial pause between requests.
+      initial_delay_seconds: 1.2
+
+      # Allow the limiter to increase the delay
+      # if rate-limit pressure is detected.
+      adaptive_delay_enabled: true
+
+      # Each adaptive increase multiplies the current delay.
+      delay_multiplier: 1.5
+
+      # Maximum pause that the adaptive limiter may reach.
+      max_delay_seconds: 30.0
+
+
+  0x:
+
+    enabled: true
+
+    # Put your personal 0x API key here.
+    api_key: "PUT_YOUR_0X_API_KEY_HERE"
+
+    rate_limit:
+
+      # Replace this value with the limit applicable
+      # to your 0x API account.
+      requests_per_minute: 50
+
+      initial_delay_seconds: 1.2
+
+      adaptive_delay_enabled: true
+
+      delay_multiplier: 1.5
+
+      max_delay_seconds: 30.0
+
+
+  Uniswap:
+
+    enabled: true
+
+    # Put your personal Uniswap API key here.
+    api_key: "PUT_YOUR_UNISWAP_API_KEY_HERE"
+
+    rate_limit:
+
+      # Replace this value with the limit applicable
+      # to your Uniswap API account.
+      requests_per_minute: 50
+
+      initial_delay_seconds: 1.2
+
+      adaptive_delay_enabled: true
+
+      delay_multiplier: 1.5
+
+      max_delay_seconds: 30.0
+
+
+  Velora:
+
+    enabled: true
+
+    # Velora Market API does not require an API key.
+    api_key: null
+
+    rate_limit:
+
+      # Replace with the applicable current API limit
+      # when we finalize the production limits.
+      requests_per_minute: 50
+
+      initial_delay_seconds: 1.2
+
+      adaptive_delay_enabled: true
+
+      delay_multiplier: 1.5
+
+      max_delay_seconds: 30.0
