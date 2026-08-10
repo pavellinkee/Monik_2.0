@@ -4,7 +4,7 @@ Tests for the shared asynchronous HTTP client.
 
 import asyncio
 
-import aiohttp
+from aiohttp import web
 import pytest
 
 from aggregators.http_client import (
@@ -142,10 +142,7 @@ def test_configuration_properties():
         == pytest.approx(25.0)
     )
 
-    assert (
-        client.connector_limit
-        == 50
-    )
+    assert client.connector_limit == 50
 
 
 @pytest.mark.asyncio
@@ -179,25 +176,25 @@ async def test_get_returns_status_and_json(
     """GET returns HTTP status and decoded JSON."""
 
     async def handler(request):
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "success": True,
                 "value": 123,
             }
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -233,24 +230,24 @@ async def test_post_returns_status_and_json(
     async def handler(request):
         body = await request.json()
 
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "received": body,
             }
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_post(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -290,7 +287,7 @@ async def test_get_passes_headers_and_params(
     """GET forwards headers and query parameters."""
 
     async def handler(request):
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "token": request.headers.get(
                     "X-Test-Header"
@@ -301,18 +298,18 @@ async def test_get_passes_headers_and_params(
             }
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -354,7 +351,7 @@ async def test_post_passes_headers_and_params(
     async def handler(request):
         body = await request.json()
 
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "header": request.headers.get(
                     "X-Test-Header"
@@ -366,18 +363,18 @@ async def test_post_passes_headers_and_params(
             }
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_post(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -423,23 +420,23 @@ async def test_non_json_response_is_returned_as_text(
     """Non-JSON responses are returned as text."""
 
     async def handler(request):
-        return aiohttp.web.Response(
+        return web.Response(
             text="plain response",
             content_type="text/plain",
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -469,22 +466,22 @@ async def test_empty_response_returns_none(
     """Empty responses return None."""
 
     async def handler(request):
-        return aiohttp.web.Response(
+        return web.Response(
             status=204
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -519,25 +516,25 @@ async def test_http_error_status_is_preserved(
     """
 
     async def handler(request):
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "error": "rate limited",
             },
             status=429,
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/test",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
@@ -572,24 +569,24 @@ async def test_timeout_becomes_http_request_error(
     async def handler(request):
         await asyncio.sleep(0.2)
 
-        return aiohttp.web.json_response(
+        return web.json_response(
             {
                 "success": True,
             }
         )
 
-    app = aiohttp.web.Application()
+    app = web.Application()
 
     app.router.add_get(
         "/slow",
         handler,
     )
 
-    runner = aiohttp.web.AppRunner(app)
+    runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = aiohttp.web.TCPSite(
+    site = web.TCPSite(
         runner,
         "127.0.0.1",
         unused_tcp_port,
