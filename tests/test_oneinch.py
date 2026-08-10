@@ -16,6 +16,7 @@ from aggregators.errors import (
 )
 from aggregators.oneinch import OneInchAggregator
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class FakeHttpClient:
@@ -38,6 +39,17 @@ class FakeHttpClient:
     ):
         """Return the predefined fake response."""
         return self.status, self.data
+
+
+def make_request() -> QuoteRequest:
+    """Create a standard test quote request."""
+
+    return QuoteRequest(
+        chain_id=137,
+        token_in="0xTokenIn",
+        token_out="0xTokenOut",
+        amount=1000000000,
+    )
 
 
 @pytest.mark.asyncio
@@ -70,10 +82,7 @@ async def test_get_quote_returns_normalized_quote():
     )
 
     quote = await aggregator.get_quote(
-        chain_id=137,
-        token_in="0xTokenIn",
-        token_out="0xTokenOut",
-        amount=1000000000,
+        make_request()
     )
 
     assert isinstance(quote, Quote)
@@ -120,10 +129,7 @@ async def test_get_quote_raises_rate_limit_error():
         AggregatorRateLimitError
     ):
         await aggregator.get_quote(
-            chain_id=137,
-            token_in="0xTokenIn",
-            token_out="0xTokenOut",
-            amount=1000000000,
+            make_request()
         )
 
 
@@ -147,10 +153,7 @@ async def test_get_quote_raises_request_error_on_http_error():
         AggregatorRequestError
     ):
         await aggregator.get_quote(
-            chain_id=137,
-            token_in="0xTokenIn",
-            token_out="0xTokenOut",
-            amount=1000000000,
+            make_request()
         )
 
 
