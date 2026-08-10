@@ -14,8 +14,11 @@ Does NOT:
     - communicate with aggregators;
     - send Telegram messages.
 
-The resolver deliberately uses TokenRepository as
-the only data-access layer.
+Compatibility:
+    The resolver keeps the existing get_* interface and also
+    exposes the newer resolve_* interface.
+
+    Both interfaces use the same internal implementation.
 """
 
 from __future__ import annotations
@@ -41,6 +44,10 @@ class TokenResolver:
     ) -> None:
         self._repository = repository
 
+    # ============================================================
+    # Current / legacy public interface
+    # ============================================================
+
     async def get_enabled_tokens(
         self,
     ) -> tuple[Token, ...]:
@@ -54,16 +61,9 @@ class TokenResolver:
 
         rows = await self._repository.get_enabled()
 
-        tokens: list[Token] = []
-
-        for row in rows:
-            token = await self._build_token(
-                row
-            )
-
-            tokens.append(token)
-
-        return tuple(tokens)
+        return await self._resolve_rows(
+            rows
+        )
 
     async def get_by_symbol(
         self,
@@ -88,10 +88,6 @@ class TokenResolver:
         )
 
         if row is None:
-            # Repository currently performs exact matching.
-            # Try the original representation as a fallback
-            # so the resolver remains compatible with databases
-            # that store symbols in uppercase.
             if normalized_symbol != symbol:
                 row = await self._repository.get_by_symbol(
                     symbol
@@ -123,10 +119,9 @@ class TokenResolver:
             symbol
         )
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0."
-            )
+        self._validate_chain_id(
+            chain_id
+        )
 
         row = await self._repository.get_by_symbol(
             normalized_symbol
@@ -170,9 +165,6 @@ class TokenResolver:
         """
         Resolve both the logical token and its address
         on a specific network.
-
-        Returns None when either the token or its
-        available address is unavailable.
         """
 
         token = await self.get_by_symbol(
@@ -203,10 +195,9 @@ class TokenResolver:
         The result follows token priority order.
         """
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0."
-            )
+        self._validate_chain_id(
+            chain_id
+        )
 
         tokens = await self.get_enabled_tokens()
 
@@ -219,8 +210,10 @@ class TokenResolver:
                 (
                     item
                     for item in token.addresses
-                    if item.chain_id == chain_id
-                    and item.availability
+                    if (
+                        item.chain_id == chain_id
+                        and item.availability
+                    )
                 ),
                 None,
             )
@@ -234,6 +227,93 @@ class TokenResolver:
                 )
 
         return tuple(result)
+
+    # ============================================================
+    # New public interface
+    # ============================================================
+
+    async def resolve_all(
+        self,
+    ) -> tuple[Token, ...]:
+        """
+        Resolve all tokens from the repository.
+
+        This is the new general-purpose resolver interface.
+        """
+
+        rows = await self._repository.get_all()
+
+        return await self._resolve_rows(
+            rows
+        )
+
+    async def resolve_enabled(
+        self,
+    ) -> tuple[Token, ...]:
+        """
+        Resolve enabled tokens.
+
+        Equivalent to get_enabled_tokens().
+        """
+
+        return await self.get_enabled_tokens()
+
+    async def resolve_by_symbol(
+        self,
+        symbol: str,
+    ) -> Token | None:
+        """
+        Resolve one enabled token by symbol.
+
+        Equivalent to get_by_symbol().
+        """
+
+        return await self.get_by_symbol(
+            symbol
+        )
+
+    async def resolve_for_chain(
+        self,
+        chain_id: int,
+    ) -> tuple[
+        tuple[Token, TokenAddress],
+        ...,
+    ]:
+        """
+        Resolve enabled tokens and their available
+        addresses on a specific blockchain network.
+
+        Equivalent to get_enabled_on_chain().
+        """
+
+        return await self.get_enabled_on_chain(
+            chain_id
+        )
+
+    # ============================================================
+    # Internal resolution
+    # ============================================================
+
+    async def _resolve_rows(
+        self,
+        rows: list[Any],
+    ) -> tuple[Token, ...]:
+        """
+        Convert repository token rows into Token models.
+        """
+
+        tokens: list[Token] = []
+
+        for row in rows:
+            token = await self._build_token(
+                row
+            )
+
+            tokens.append(
+                token
+            )
+
+        return tuple(tokens)
 
     async def _build_token(
         self,
@@ -261,15 +341,27 @@ class TokenResolver:
         )
 
         return Token(
-            symbol=self._token_symbol(row),
-            name=self._token_name(row),
+            symbol=self._token_symbol(
+                row
+            ),
+            name=self._token_name(
+                row
+            ),
             coingecko_id=self._token_coingecko_id(
                 row
             ),
-            enabled=self._row_enabled(row),
-            priority=self._token_priority(row),
+            enabled=self._row_enabled(
+                row
+            ),
+            priority=self._token_priority(
+                row
+            ),
             addresses=addresses,
         )
+
+    # ============================================================
+    # Address conversion
+    # ============================================================
 
     @staticmethod
     def _build_token_address(
@@ -280,7 +372,10 @@ class TokenResolver:
         into TokenAddress.
         """
 
-        if not isinstance(row, (tuple, list)):
+        if not isinstance(
+            row,
+            (tuple, list),
+        ):
             raise ValueError(
                 "Token address repository row must "
                 "be a tuple or list."
@@ -292,10 +387,18 @@ class TokenResolver:
             )
 
         return TokenAddress(
-            chain_id=int(row[2]),
-            address=str(row[3]),
-            decimals=int(row[4]),
-            availability=bool(row[5]),
+            chain_id=int(
+                row[2]
+            ),
+            address=str(
+                row[3]
+            ),
+            decimals=int(
+                row[4]
+            ),
+            availability=bool(
+                row[5]
+            ),
         )
 
     @staticmethod
@@ -322,7 +425,10 @@ class TokenResolver:
             10 availability
         """
 
-        if not isinstance(row, (tuple, list)):
+        if not isinstance(
+            row,
+            (tuple, list),
+        ):
             raise ValueError(
                 "Joined token repository row must "
                 "be a tuple or list."
@@ -334,11 +440,23 @@ class TokenResolver:
             )
 
         return TokenAddress(
-            chain_id=int(row[7]),
-            address=str(row[8]),
-            decimals=int(row[9]),
-            availability=bool(row[10]),
+            chain_id=int(
+                row[7]
+            ),
+            address=str(
+                row[8]
+            ),
+            decimals=int(
+                row[9]
+            ),
+            availability=bool(
+                row[10]
+            ),
         )
+
+    # ============================================================
+    # Validation and row extraction
+    # ============================================================
 
     @staticmethod
     def _normalize_symbol(
@@ -346,7 +464,10 @@ class TokenResolver:
     ) -> str:
         """Normalize a token symbol."""
 
-        if not isinstance(symbol, str):
+        if not isinstance(
+            symbol,
+            str,
+        ):
             raise TypeError(
                 "symbol must be a string."
             )
@@ -361,12 +482,26 @@ class TokenResolver:
         return normalized
 
     @staticmethod
+    def _validate_chain_id(
+        chain_id: int,
+    ) -> None:
+        """Validate blockchain network identifier."""
+
+        if chain_id <= 0:
+            raise ValueError(
+                "chain_id must be greater than 0."
+            )
+
+    @staticmethod
     def _token_id(
         row: Any,
     ) -> int:
         """Extract token ID from a repository row."""
 
-        if not isinstance(row, (tuple, list)):
+        if not isinstance(
+            row,
+            (tuple, list),
+        ):
             raise ValueError(
                 "Token repository row must "
                 "be a tuple or list."
@@ -377,7 +512,9 @@ class TokenResolver:
                 "Token repository row is empty."
             )
 
-        return int(row[0])
+        return int(
+            row[0]
+        )
 
     @staticmethod
     def _token_symbol(
@@ -390,7 +527,9 @@ class TokenResolver:
                 "Token repository row is incomplete."
             )
 
-        return str(row[1])
+        return str(
+            row[1]
+        )
 
     @staticmethod
     def _token_name(
@@ -403,7 +542,9 @@ class TokenResolver:
                 "Token repository row is incomplete."
             )
 
-        return str(row[2])
+        return str(
+            row[2]
+        )
 
     @staticmethod
     def _token_coingecko_id(
@@ -416,7 +557,9 @@ class TokenResolver:
                 "Token repository row is incomplete."
             )
 
-        return str(row[3])
+        return str(
+            row[3]
+        )
 
     @staticmethod
     def _row_enabled(
@@ -429,7 +572,9 @@ class TokenResolver:
                 "Token repository row is incomplete."
             )
 
-        return bool(row[4])
+        return bool(
+            row[4]
+        )
 
     @staticmethod
     def _token_priority(
@@ -442,4 +587,6 @@ class TokenResolver:
                 "Token repository row is incomplete."
             )
 
-        return int(row[5])
+        return int(
+            row[5]
+        )
