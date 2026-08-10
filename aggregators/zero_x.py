@@ -1,8 +1,8 @@
 """
-0x aggregator adapter.
+0x Swap API v2 aggregator adapter.
 
 Responsibility:
-    Communicates with the 0x Swap API price endpoint
+    Communicates with the 0x Swap API v2
     and converts the response into our common Quote model.
 
 Does NOT:
@@ -25,16 +25,22 @@ from aggregators.errors import (
 )
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class ZeroXAggregator(AggregatorInterface):
-    """0x Swap API adapter."""
+    """0x Swap API v2 adapter."""
 
-    BASE_URL = "https://api.0x.org"
+    BASE_URL = (
+        "https://api.0x.org/"
+        "swap/allowance-holder/quote"
+    )
 
     NAME = "0x"
 
     OFFICIAL_URL = "https://0x.org"
+
+    NATIVE_TOKEN_DECIMALS = 18
 
     def __init__(
         self,
@@ -61,37 +67,14 @@ class ZeroXAggregator(AggregatorInterface):
 
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
+        request: QuoteRequest,
     ) -> Quote:
-        """Request and normalize a 0x price quote."""
+        """Request and normalize a 0x quote."""
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0"
+        if not request.requester_address:
+            raise AggregatorConfigurationError(
+                "0x quote requires requester_address."
             )
-
-        if not token_in:
-            raise ValueError(
-                "token_in is required"
-            )
-
-        if not token_out:
-            raise ValueError(
-                "token_out is required"
-            )
-
-        if amount <= 0:
-            raise ValueError(
-                "amount must be greater than 0"
-            )
-
-        url = (
-            f"{self.BASE_URL}"
-            "/swap/allowance-holder/price"
-        )
 
         headers = {
             "0x-api-key": self._api_key,
@@ -100,15 +83,16 @@ class ZeroXAggregator(AggregatorInterface):
         }
 
         params = {
-            "chainId": str(chain_id),
-            "sellToken": token_in,
-            "buyToken": token_out,
-            "sellAmount": str(amount),
+            "chainId": str(request.chain_id),
+            "buyToken": request.token_out,
+            "sellToken": request.token_in,
+            "sellAmount": str(request.amount),
+            "taker": request.requester_address,
         }
 
         try:
             status, data = await self._http_client.get(
-                url,
+                self.BASE_URL,
                 headers=headers,
                 params=params,
             )
@@ -133,119 +117,163 @@ class ZeroXAggregator(AggregatorInterface):
                 "0x returned a non-object response."
             )
 
+        liquidity_available = data.get(
+            "liquidityAvailable"
+        )
+
+        if liquidity_available is False:
+            raise AggregatorResponseError(
+                "0x reported no available liquidity."
+            )
+
         amount_out = self._extract_amount_out(
             data
         )
 
-        gas_estimate = self._parse_optional_int(
-            data.get("gas")
+        transaction = data.get(
+            "transaction"
         )
 
-        gas_cost_native = self._parse_optional_decimal(
-            data.get("gasCost")
+        gas_estimate = self._extract_gas_estimate(
+            transaction
         )
 
-        price_impact = self._parse_optional_decimal(
-            data.get("priceImpact")
+        gas_cost_native = (
+            self._extract_network_fee(data)
         )
 
-        route = self._extract_route(
-            data
-        )
+        route = self._extract_route(data)
 
-        timestamp = data.get(
-            "timestamp",
+        block_number = data.get(
+            "blockNumber",
             "",
         )
 
         return Quote(
             aggregator=self.name,
-            chain_id=chain_id,
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount,
+            chain_id=request.chain_id,
+            token_in=request.token_in,
+            token_out=request.token_out,
+            amount_in=request.amount,
             amount_out=amount_out,
             gas_estimate=gas_estimate,
             gas_cost_native=gas_cost_native,
-            price_impact=price_impact,
+            price_impact=None,
             route=route,
-            timestamp=str(timestamp),
+            timestamp=str(block_number),
         )
 
     async def is_available(self) -> bool:
         """
         Check whether the HTTP client is available.
 
-        This does not send an additional request to 0x.
+        This does not send an additional request.
         """
+
         return self._http_client is not None
 
     @staticmethod
     def _extract_amount_out(
         data: dict[str, Any],
     ) -> int:
-        """Extract the buy amount from a 0x response."""
+        """Extract destination token amount."""
 
-        candidates = (
-            data.get("buyAmount"),
-            data.get("buyAmount"),
-            data.get("buyTokenAmount"),
-        )
+        value = data.get("buyAmount")
 
-        for value in candidates:
-            if value is None:
-                continue
+        if value is None:
+            raise AggregatorResponseError(
+                "0x response does not contain buyAmount."
+            )
 
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
+        try:
+            return int(value)
 
-        raise AggregatorResponseError(
-            "0x response does not contain a valid "
-            "output token amount."
-        )
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "0x returned an invalid buyAmount."
+            ) from error
 
     @staticmethod
-    def _parse_optional_int(
-        value: Any,
+    def _extract_gas_estimate(
+        transaction: Any,
     ) -> int | None:
-        """Convert an optional value to int."""
+        """Extract estimated gas units."""
+
+        if not isinstance(
+            transaction,
+            dict,
+        ):
+            return None
+
+        value = transaction.get("gas")
 
         if value is None:
             return None
 
         try:
             return int(value)
+
         except (TypeError, ValueError):
             return None
 
-    @staticmethod
-    def _parse_optional_decimal(
-        value: Any,
+    @classmethod
+    def _extract_network_fee(
+        cls,
+        data: dict[str, Any],
     ) -> Decimal | None:
-        """Convert an optional value to Decimal."""
+        """
+        Convert totalNetworkFee from wei to native units.
+        """
+
+        value = data.get(
+            "totalNetworkFee"
+        )
 
         if value is None:
             return None
 
         try:
-            return Decimal(str(value))
-        except (TypeError, ValueError):
-            return None
+            fee_wei = Decimal(str(value))
+
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "0x returned an invalid totalNetworkFee."
+            ) from error
+
+        return fee_wei / Decimal(
+            10 ** cls.NATIVE_TOKEN_DECIMALS
+        )
 
     @staticmethod
     def _extract_route(
         data: dict[str, Any],
     ) -> str | None:
-        """Extract a compact route description."""
+        """Extract route sources from the response."""
 
         route = data.get("route")
 
-        if route is None:
+        if not isinstance(route, dict):
             return None
 
-        if isinstance(route, str):
-            return route
+        fills = route.get("fills")
 
-        return str(route)
+        if not isinstance(fills, list):
+            return None
+
+        names: list[str] = []
+
+        for fill in fills:
+            if not isinstance(fill, dict):
+                continue
+
+            source = fill.get("source")
+
+            if source:
+                names.append(str(source))
+
+        if not names:
+            return None
+
+        return " → ".join(
+            dict.fromkeys(names)
+        )
