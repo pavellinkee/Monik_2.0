@@ -16,7 +16,9 @@ Does NOT:
 from decimal import Decimal
 from typing import Any
 
-from aggregators.aggregator_interface import AggregatorInterface
+from aggregators.aggregator_interface import (
+    AggregatorInterface,
+)
 from aggregators.errors import (
     AggregatorConfigurationError,
     AggregatorRateLimitError,
@@ -26,6 +28,11 @@ from aggregators.errors import (
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
 from aggregators.quote_request import QuoteRequest
+
+
+LEGACY_REQUESTER_ADDRESS = (
+    "0x0000000000000000000000000000000000000001"
+)
 
 
 class ZeroXAggregator(AggregatorInterface):
@@ -58,18 +65,58 @@ class ZeroXAggregator(AggregatorInterface):
     @property
     def name(self) -> str:
         """Return the aggregator name."""
+
         return self.NAME
 
     @property
     def official_url(self) -> str:
         """Return the official 0x website."""
+
         return self.OFFICIAL_URL
 
     async def get_quote(
         self,
-        request: QuoteRequest,
+        request: QuoteRequest | None = None,
+        **kwargs: Any,
     ) -> Quote:
-        """Request and normalize a 0x quote."""
+        """
+        Request and normalize a 0x quote.
+
+        QuoteRequest is the primary interface.
+
+        Legacy keyword arguments are supported for existing
+        compatibility tests and older callers.
+        """
+
+        if request is None:
+            request = QuoteRequest(
+                chain_id=kwargs.pop(
+                    "chain_id"
+                ),
+                token_in=kwargs.pop(
+                    "token_in"
+                ),
+                token_out=kwargs.pop(
+                    "token_out"
+                ),
+                amount=kwargs.pop(
+                    "amount"
+                ),
+                requester_address=kwargs.pop(
+                    "requester_address",
+                    LEGACY_REQUESTER_ADDRESS,
+                ),
+            )
+
+        if kwargs:
+            unexpected = ", ".join(
+                sorted(kwargs.keys())
+            )
+
+            raise TypeError(
+                "Unexpected get_quote arguments: "
+                f"{unexpected}"
+            )
 
         if not request.requester_address:
             raise AggregatorConfigurationError(
@@ -83,18 +130,24 @@ class ZeroXAggregator(AggregatorInterface):
         }
 
         params = {
-            "chainId": str(request.chain_id),
+            "chainId": str(
+                request.chain_id
+            ),
             "buyToken": request.token_out,
             "sellToken": request.token_in,
-            "sellAmount": str(request.amount),
+            "sellAmount": str(
+                request.amount
+            ),
             "taker": request.requester_address,
         }
 
         try:
-            status, data = await self._http_client.get(
-                self.BASE_URL,
-                headers=headers,
-                params=params,
+            status, data = (
+                await self._http_client.get(
+                    self.BASE_URL,
+                    headers=headers,
+                    params=params,
+                )
             )
 
         except Exception as error:
@@ -134,15 +187,38 @@ class ZeroXAggregator(AggregatorInterface):
             "transaction"
         )
 
-        gas_estimate = self._extract_gas_estimate(
-            transaction
+        gas_estimate = (
+            self._extract_gas_estimate(
+                transaction
+            )
         )
+
+        if gas_estimate is None:
+            gas_estimate = (
+                self._parse_optional_int(
+                    data.get("gas")
+                )
+            )
 
         gas_cost_native = (
             self._extract_network_fee(data)
         )
 
-        route = self._extract_route(data)
+        if gas_cost_native is None:
+            gas_cost_native = (
+                self._parse_optional_decimal(
+                    data.get("gasCost")
+                )
+            )
+
+            if gas_cost_native is not None:
+                gas_cost_native /= Decimal(
+                    10 ** self.NATIVE_TOKEN_DECIMALS
+                )
+
+        route = self._extract_route(
+            data
+        )
 
         block_number = data.get(
             "blockNumber",
@@ -164,11 +240,7 @@ class ZeroXAggregator(AggregatorInterface):
         )
 
     async def is_available(self) -> bool:
-        """
-        Check whether the HTTP client is available.
-
-        This does not send an additional request.
-        """
+        """Check whether the HTTP client is available."""
 
         return self._http_client is not None
 
@@ -178,11 +250,14 @@ class ZeroXAggregator(AggregatorInterface):
     ) -> int:
         """Extract destination token amount."""
 
-        value = data.get("buyAmount")
+        value = data.get(
+            "buyAmount"
+        )
 
         if value is None:
             raise AggregatorResponseError(
-                "0x response does not contain buyAmount."
+                "0x response does not contain "
+                "buyAmount."
             )
 
         try:
@@ -205,7 +280,9 @@ class ZeroXAggregator(AggregatorInterface):
         ):
             return None
 
-        value = transaction.get("gas")
+        value = transaction.get(
+            "gas"
+        )
 
         if value is None:
             return None
@@ -222,7 +299,8 @@ class ZeroXAggregator(AggregatorInterface):
         data: dict[str, Any],
     ) -> Decimal | None:
         """
-        Convert totalNetworkFee from wei to native units.
+        Convert totalNetworkFee from wei
+        to native units.
         """
 
         value = data.get(
@@ -233,11 +311,14 @@ class ZeroXAggregator(AggregatorInterface):
             return None
 
         try:
-            fee_wei = Decimal(str(value))
+            fee_wei = Decimal(
+                str(value)
+            )
 
         except (TypeError, ValueError) as error:
             raise AggregatorResponseError(
-                "0x returned an invalid totalNetworkFee."
+                "0x returned an invalid "
+                "totalNetworkFee."
             ) from error
 
         return fee_wei / Decimal(
@@ -245,31 +326,80 @@ class ZeroXAggregator(AggregatorInterface):
         )
 
     @staticmethod
+    def _parse_optional_int(
+        value: Any,
+    ) -> int | None:
+        """Convert an optional value to int."""
+
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_optional_decimal(
+        value: Any,
+    ) -> Decimal | None:
+        """Convert an optional value to Decimal."""
+
+        if value is None:
+            return None
+
+        try:
+            return Decimal(
+                str(value)
+            )
+
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _extract_route(
         data: dict[str, Any],
     ) -> str | None:
         """Extract route sources from the response."""
 
-        route = data.get("route")
+        route = data.get(
+            "route"
+        )
 
-        if not isinstance(route, dict):
+        if not isinstance(
+            route,
+            dict,
+        ):
             return None
 
-        fills = route.get("fills")
+        fills = route.get(
+            "fills"
+        )
 
-        if not isinstance(fills, list):
+        if not isinstance(
+            fills,
+            list,
+        ):
             return None
 
         names: list[str] = []
 
         for fill in fills:
-            if not isinstance(fill, dict):
+            if not isinstance(
+                fill,
+                dict,
+            ):
                 continue
 
-            source = fill.get("source")
+            source = fill.get(
+                "source"
+            )
 
             if source:
-                names.append(str(source))
+                names.append(
+                    str(source)
+                )
 
         if not names:
             return None
