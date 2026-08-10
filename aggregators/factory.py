@@ -8,7 +8,8 @@ Supports:
     - the existing configuration pipeline;
     - the shared HttpClient;
     - HttpClientManager-based creation;
-    - AggregatorRegistry-based implementation lookup.
+    - AggregatorRegistry-based implementation lookup;
+    - AggregatorInstanceRegistry for created instances.
 
 Does NOT:
     - make API requests;
@@ -23,12 +24,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from aggregators.aggregator_interface import AggregatorInterface
+from aggregators.aggregator_interface import (
+    AggregatorInterface,
+)
 from aggregators.errors import (
     AggregatorConfigurationError,
 )
 from aggregators.http_client import HttpClient
-from aggregators.http_client_manager import HttpClientManager
+from aggregators.http_client_manager import (
+    HttpClientManager,
+)
+from aggregators.instance_registry import (
+    AggregatorInstanceRegistry,
+)
 from aggregators.registry import AggregatorRegistry
 
 
@@ -39,7 +47,9 @@ class AggregatorFactory:
         self,
         http_client: HttpClient | None = None,
         *,
-        http_client_manager: HttpClientManager | None = None,
+        http_client_manager: (
+            HttpClientManager | None
+        ) = None,
         registry: AggregatorRegistry | None = None,
     ):
         if (
@@ -52,6 +62,7 @@ class AggregatorFactory:
             )
 
         self._http_client = http_client
+
         self._http_client_manager = (
             http_client_manager
         )
@@ -64,7 +75,7 @@ class AggregatorFactory:
 
     @property
     def registry(self) -> AggregatorRegistry:
-        """Return the aggregator registry."""
+        """Return the static aggregator registry."""
 
         return self._registry
 
@@ -104,28 +115,9 @@ class AggregatorFactory:
         self,
         name: str,
     ) -> bool:
-        """
-        Check whether an aggregator is registered.
+        """Check whether an aggregator is registered."""
 
-        Supports both the new AggregatorRegistry
-        and the legacy dictionary-style registry.
-        """
-
-        if hasattr(
-            self._registry,
-            "contains",
-        ):
-            return self._registry.contains(
-                name
-            )
-
-        if isinstance(
-            self._registry,
-            dict,
-        ):
-            return name in self._registry
-
-        return False
+        return self._registry.contains(name)
 
     def _registry_get(
         self,
@@ -133,28 +125,7 @@ class AggregatorFactory:
     ):
         """Get an aggregator definition."""
 
-        if hasattr(
-            self._registry,
-            "get",
-        ):
-            return self._registry.get(
-                name
-            )
-
-        if isinstance(
-            self._registry,
-            dict,
-        ):
-            try:
-                return self._registry[name]
-            except KeyError as error:
-                raise KeyError(
-                    f"Unknown aggregator: {name}"
-                ) from error
-
-        raise KeyError(
-            f"Unknown aggregator: {name}"
-        )
+        return self._registry.get(name)
 
     def _create_one(
         self,
@@ -163,16 +134,12 @@ class AggregatorFactory:
     ) -> AggregatorInterface:
         """Create one configured aggregator."""
 
-        if not self._registry_contains(
-            name
-        ):
-            raise AggregatorConfigurationError(
+        if not self._registry_contains(name):
+            raise KeyError(
                 f"Unknown aggregator: '{name}'."
             )
 
-        definition = self._registry_get(
-            name
-        )
+        definition = self._registry_get(name)
 
         enabled = getattr(
             config,
@@ -231,7 +198,10 @@ class AggregatorFactory:
 
     def create(
         self,
-        name_or_configs: str | dict[str, Any],
+        name_or_configs: (
+            str
+            | dict[str, Any]
+        ),
         config: Any | None = None,
     ):
         """
@@ -271,10 +241,7 @@ class AggregatorFactory:
             str,
             Any,
         ],
-    ) -> dict[
-        str,
-        AggregatorInterface,
-    ]:
+    ) -> AggregatorInstanceRegistry:
         """
         Create all enabled aggregators.
 
@@ -289,15 +256,10 @@ class AggregatorFactory:
                 "aggregators must be a dictionary."
             )
 
-        result: dict[
-            str,
-            AggregatorInterface,
-        ] = {}
+        result = AggregatorInstanceRegistry()
 
         for name, config in aggregators.items():
-            if not self._registry_contains(
-                name
-            ):
+            if not self._registry_contains(name):
                 raise AggregatorConfigurationError(
                     f"Unknown aggregator: '{name}'."
                 )
@@ -309,12 +271,17 @@ class AggregatorFactory:
             )
 
             if enabled:
-                result[name] = self._create_one(
+                instance = self._create_one(
                     name,
                     config,
                 )
 
-        if not result:
+                result.register(
+                    name,
+                    instance,
+                )
+
+        if len(result) == 0:
             raise AggregatorConfigurationError(
                 "No enabled aggregators were created."
             )
