@@ -100,6 +100,62 @@ class AggregatorFactory:
             "No HTTP client source is configured."
         )
 
+    def _registry_contains(
+        self,
+        name: str,
+    ) -> bool:
+        """
+        Check whether an aggregator is registered.
+
+        Supports both the new AggregatorRegistry
+        and the legacy dictionary-style registry.
+        """
+
+        if hasattr(
+            self._registry,
+            "contains",
+        ):
+            return self._registry.contains(
+                name
+            )
+
+        if isinstance(
+            self._registry,
+            dict,
+        ):
+            return name in self._registry
+
+        return False
+
+    def _registry_get(
+        self,
+        name: str,
+    ):
+        """Get an aggregator definition."""
+
+        if hasattr(
+            self._registry,
+            "get",
+        ):
+            return self._registry.get(
+                name
+            )
+
+        if isinstance(
+            self._registry,
+            dict,
+        ):
+            try:
+                return self._registry[name]
+            except KeyError as error:
+                raise KeyError(
+                    f"Unknown aggregator: {name}"
+                ) from error
+
+        raise KeyError(
+            f"Unknown aggregator: {name}"
+        )
+
     def _create_one(
         self,
         name: str,
@@ -107,7 +163,16 @@ class AggregatorFactory:
     ) -> AggregatorInterface:
         """Create one configured aggregator."""
 
-        definition = self._registry.get(name)
+        if not self._registry_contains(
+            name
+        ):
+            raise AggregatorConfigurationError(
+                f"Unknown aggregator: '{name}'."
+            )
+
+        definition = self._registry_get(
+            name
+        )
 
         enabled = getattr(
             config,
@@ -132,22 +197,29 @@ class AggregatorFactory:
             None,
         )
 
-        if definition.requires_api_key:
-            if not api_key:
-                raise AggregatorConfigurationError(
-                    f"Aggregator '{name}' requires "
-                    f"an API key."
-                )
+        requires_api_key = getattr(
+            definition,
+            "requires_api_key",
+            False,
+        )
+
+        if requires_api_key and not api_key:
+            raise AggregatorConfigurationError(
+                f"Aggregator '{name}' requires "
+                f"an API key."
+            )
 
         http_client = self._get_http_client(
             name
         )
 
-        implementation = (
-            definition.implementation
+        implementation = getattr(
+            definition,
+            "implementation",
+            definition,
         )
 
-        if definition.requires_api_key:
+        if requires_api_key:
             return implementation(
                 http_client=http_client,
                 api_key=api_key,
@@ -161,9 +233,6 @@ class AggregatorFactory:
         self,
         name_or_configs: str | dict[str, Any],
         config: Any | None = None,
-    ) -> (
-        AggregatorInterface
-        | dict[str, AggregatorInterface]
     ):
         """
         Create one aggregator or all configured aggregators.
@@ -226,7 +295,7 @@ class AggregatorFactory:
         ] = {}
 
         for name, config in aggregators.items():
-            if not self._registry.contains(
+            if not self._registry_contains(
                 name
             ):
                 raise AggregatorConfigurationError(
