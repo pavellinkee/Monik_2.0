@@ -25,6 +25,7 @@ from aggregators.errors import (
 )
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class OneInchAggregator(AggregatorInterface):
@@ -63,36 +64,13 @@ class OneInchAggregator(AggregatorInterface):
 
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
+        request: QuoteRequest,
     ) -> Quote:
         """Request and normalize a 1inch quote."""
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0"
-            )
-
-        if not token_in:
-            raise ValueError(
-                "token_in is required"
-            )
-
-        if not token_out:
-            raise ValueError(
-                "token_out is required"
-            )
-
-        if amount <= 0:
-            raise ValueError(
-                "amount must be greater than 0"
-            )
-
         url = (
             f"{self.BASE_URL}"
-            f"/{chain_id}/quote"
+            f"/{request.chain_id}/quote"
         )
 
         headers = {
@@ -103,9 +81,9 @@ class OneInchAggregator(AggregatorInterface):
         }
 
         params = {
-            "src": token_in,
-            "dst": token_out,
-            "amount": str(amount),
+            "src": request.token_in,
+            "dst": request.token_out,
+            "amount": str(request.amount),
         }
 
         try:
@@ -151,9 +129,7 @@ class OneInchAggregator(AggregatorInterface):
             data.get("priceImpact")
         )
 
-        route = self._extract_route(
-            data
-        )
+        route = self._extract_route(data)
 
         timestamp = data.get(
             "timestamp",
@@ -162,10 +138,10 @@ class OneInchAggregator(AggregatorInterface):
 
         return Quote(
             aggregator=self.name,
-            chain_id=chain_id,
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount,
+            chain_id=request.chain_id,
+            token_in=request.token_in,
+            token_out=request.token_out,
+            amount_in=request.amount,
             amount_out=amount_out,
             gas_estimate=gas_estimate,
             gas_cost_native=gas_cost_native,
