@@ -2,268 +2,185 @@
 Aggregator factory.
 
 Responsibility:
-    Creates configured aggregator adapters and puts them
-    into an AggregatorRegistry.
+    Creates configured aggregator adapter instances.
 
 Does NOT:
-    - store API keys;
-    - perform API requests;
-    - implement rate limiting;
-    - implement request queues;
+    - make API requests;
+    - control rate limits;
+    - control request queues;
+    - run scanner stages;
     - calculate arbitrage;
-    - implement Stage 1;
-    - implement Stage 2.
-
-Configuration may be supplied either as plain dictionaries
-or as Pydantic AggregatorConfig models.
+    - send Telegram messages.
 """
+
+from __future__ import annotations
 
 from typing import Any
 
 from aggregators.aggregator_interface import AggregatorInterface
-from aggregators.http_client import HttpClient
-from aggregators.oneinch import OneInchAggregator
-from aggregators.registry import AggregatorRegistry
-from aggregators.uniswap import UniswapAggregator
-from aggregators.velora import VeloraAggregator
-from aggregators.zero_x import ZeroXAggregator
+from aggregators.errors import (
+    AggregatorConfigurationError,
+)
+from aggregators.http_client_manager import (
+    HttpClientManager,
+)
+from aggregators.registry import (
+    AggregatorRegistry,
+)
 
 
 class AggregatorFactory:
-    """
-    Creates configured aggregator adapters.
-
-    Supported configuration format:
-
-        {
-            "1inch": {
-                "enabled": True,
-                "api_key": "..."
-            },
-            "0x": {
-                "enabled": True,
-                "api_key": "..."
-            },
-            "Uniswap": {
-                "enabled": True,
-                "api_key": "..."
-            },
-            "Velora": {
-                "enabled": True
-            }
-        }
-
-    The configuration values may also be Pydantic models
-    with a model_dump() method.
-
-    API keys are supplied by external configuration
-    and are never hardcoded here.
-    """
-
-    _BUILDERS = {
-        "1inch": "_build_oneinch",
-        "0x": "_build_zero_x",
-        "Uniswap": "_build_uniswap",
-        "Velora": "_build_velora",
-    }
+    """Creates configured aggregator adapters."""
 
     def __init__(
         self,
-        http_client: HttpClient,
+        http_client_manager: HttpClientManager,
+        registry: AggregatorRegistry | None = None,
     ):
-        self._http_client = http_client
+        self._http_client_manager = (
+            http_client_manager
+        )
+
+        self._registry = (
+            registry
+            if registry is not None
+            else AggregatorRegistry()
+        )
+
+    @property
+    def registry(self) -> AggregatorRegistry:
+        """Return the aggregator registry."""
+
+        return self._registry
+
+    @property
+    def http_client_manager(
+        self,
+    ) -> HttpClientManager:
+        """Return the HTTP client manager."""
+
+        return self._http_client_manager
 
     def create(
         self,
-        config: dict[str, Any],
-    ) -> AggregatorRegistry:
-        """
-        Create a registry from aggregator configuration.
-
-        Disabled aggregators are skipped.
-
-        Configuration values can be either:
-            - dictionaries;
-            - Pydantic models exposing model_dump().
-
-        Raises:
-            TypeError:
-                If configuration has an invalid structure.
-
-            ValueError:
-                If an enabled aggregator has invalid configuration.
-        """
-
-        if not isinstance(config, dict):
-            raise TypeError(
-                "Aggregator configuration must be a dictionary."
-            )
-
-        adapters: list[AggregatorInterface] = []
-
-        for name, aggregator_config in config.items():
-
-            if name not in self._BUILDERS:
-                raise ValueError(
-                    f"Unknown aggregator: '{name}'."
-                )
-
-            aggregator_config = self._normalize_config(
-                name,
-                aggregator_config,
-            )
-
-            enabled = aggregator_config.get(
-                "enabled",
-                True,
-            )
-
-            if not isinstance(enabled, bool):
-                raise TypeError(
-                    f"'enabled' for '{name}' "
-                    "must be a boolean."
-                )
-
-            if not enabled:
-                continue
-
-            builder_name = self._BUILDERS[name]
-
-            builder = getattr(
-                self,
-                builder_name,
-            )
-
-            adapter = builder(
-                aggregator_config
-            )
-
-            adapters.append(adapter)
-
-        return AggregatorRegistry(
-            adapters
-        )
-
-    @staticmethod
-    def _normalize_config(
-        aggregator_name: str,
+        name: str,
         config: Any,
-    ) -> dict[str, Any]:
+    ) -> AggregatorInterface:
         """
-        Normalize aggregator configuration.
+        Create one configured aggregator.
 
-        Supports both:
-            - plain dictionaries;
-            - Pydantic models with model_dump().
+        Args:
+            name:
+                Internal aggregator identifier.
+
+            config:
+                AggregatorConfig-compatible object.
         """
 
-        if isinstance(config, dict):
-            return config
+        definition = self._registry.get(name)
 
-        model_dump = getattr(
+        enabled = getattr(
             config,
-            "model_dump",
+            "enabled",
             None,
         )
 
-        if callable(model_dump):
-            normalized = model_dump()
+        if enabled is None:
+            raise AggregatorConfigurationError(
+                f"Aggregator '{name}' configuration "
+                f"does not contain 'enabled'."
+            )
 
-            if isinstance(normalized, dict):
-                return normalized
+        if not enabled:
+            raise AggregatorConfigurationError(
+                f"Aggregator '{name}' is disabled."
+            )
 
-        raise TypeError(
-            f"Configuration for '{aggregator_name}' "
-            "must be a dictionary or a Pydantic "
-            "model with model_dump()."
-        )
-
-    def _build_oneinch(
-        self,
-        config: dict[str, Any],
-    ) -> OneInchAggregator:
-        """Build the 1inch adapter."""
-
-        api_key = self._get_required_api_key(
-            "1inch",
+        api_key = getattr(
             config,
+            "api_key",
+            None,
         )
 
-        return OneInchAggregator(
-            http_client=self._http_client,
-            api_key=api_key,
+        if definition.requires_api_key:
+            if not api_key:
+                raise AggregatorConfigurationError(
+                    f"Aggregator '{name}' requires "
+                    f"an API key."
+                )
+
+        client = (
+            self._http_client_manager.get_or_create(
+                name
+            )
         )
 
-    def _build_zero_x(
+        implementation = (
+            definition.implementation
+        )
+
+        if definition.requires_api_key:
+            return implementation(
+                http_client=client,
+                api_key=api_key,
+            )
+
+        return implementation(
+            http_client=client,
+        )
+
+    def create_enabled(
         self,
-        config: dict[str, Any],
-    ) -> ZeroXAggregator:
-        """Build the 0x adapter."""
-
-        api_key = self._get_required_api_key(
-            "0x",
-            config,
-        )
-
-        return ZeroXAggregator(
-            http_client=self._http_client,
-            api_key=api_key,
-        )
-
-    def _build_uniswap(
-        self,
-        config: dict[str, Any],
-    ) -> UniswapAggregator:
-        """Build the Uniswap adapter."""
-
-        api_key = self._get_required_api_key(
-            "Uniswap",
-            config,
-        )
-
-        return UniswapAggregator(
-            http_client=self._http_client,
-            api_key=api_key,
-        )
-
-    def _build_velora(
-        self,
-        config: dict[str, Any],
-    ) -> VeloraAggregator:
+        aggregators: dict[
+            str,
+            Any,
+        ],
+    ) -> dict[
+        str,
+        AggregatorInterface,
+    ]:
         """
-        Build the Velora adapter.
+        Create all enabled aggregators.
 
-        Velora does not require an API key.
+        Disabled aggregators are skipped.
         """
-
-        return VeloraAggregator(
-            http_client=self._http_client,
-        )
-
-    @staticmethod
-    def _get_required_api_key(
-        aggregator_name: str,
-        config: dict[str, Any],
-    ) -> str:
-        """Return a required API key from configuration."""
-
-        api_key = config.get("api_key")
 
         if not isinstance(
-            api_key,
-            str,
+            aggregators,
+            dict,
         ):
-            raise ValueError(
-                f"API key is required for "
-                f"'{aggregator_name}'."
+            raise TypeError(
+                "aggregators must be a dictionary."
             )
 
-        api_key = api_key.strip()
+        result: dict[
+            str,
+            AggregatorInterface,
+        ] = {}
 
-        if not api_key:
-            raise ValueError(
-                f"API key is required for "
-                f"'{aggregator_name}'."
+        for name, config in aggregators.items():
+            if not self._registry.contains(
+                name
+            ):
+                raise AggregatorConfigurationError(
+                    f"Unknown aggregator: '{name}'."
+                )
+
+            enabled = getattr(
+                config,
+                "enabled",
+                None,
             )
 
-        return api_key
+            if enabled:
+                result[name] = self.create(
+                    name,
+                    config,
+                )
+
+        if not result:
+            raise AggregatorConfigurationError(
+                "No enabled aggregators were created."
+            )
+
+        return result
