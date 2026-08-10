@@ -1,5 +1,5 @@
 """
-Velora aggregator adapter.
+Velora Market API v6.2 aggregator adapter.
 
 Responsibility:
     Communicates with the Velora Market API
@@ -11,10 +11,6 @@ Does NOT:
     - implement failover;
     - calculate arbitrage;
     - send Telegram messages.
-
-Authentication:
-    The Market API endpoint used here does not require
-    an API key.
 """
 
 from decimal import Decimal
@@ -28,16 +24,21 @@ from aggregators.errors import (
 )
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
+from aggregators.quote_request import QuoteRequest
 
 
 class VeloraAggregator(AggregatorInterface):
-    """Velora Market API adapter."""
+    """Velora Market API v6.2 adapter."""
 
-    BASE_URL = "https://api.paraswap.io"
+    BASE_URL = (
+        "https://api.paraswap.io/prices"
+    )
 
     NAME = "Velora"
 
     OFFICIAL_URL = "https://velora.xyz"
+
+    API_VERSION = "6.2"
 
     def __init__(
         self,
@@ -57,50 +58,41 @@ class VeloraAggregator(AggregatorInterface):
 
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
+        request: QuoteRequest,
     ) -> Quote:
-        """Request and normalize a Velora market quote."""
+        """Request and normalize a Velora quote."""
 
-        if chain_id <= 0:
-            raise ValueError(
-                "chain_id must be greater than 0"
+        if (
+            request.token_in_decimals is None
+            or request.token_out_decimals is None
+        ):
+            raise AggregatorResponseError(
+                "Velora quote requires token decimals."
             )
-
-        if not token_in:
-            raise ValueError(
-                "token_in is required"
-            )
-
-        if not token_out:
-            raise ValueError(
-                "token_out is required"
-            )
-
-        if amount <= 0:
-            raise ValueError(
-                "amount must be greater than 0"
-            )
-
-        url = f"{self.BASE_URL}/prices"
 
         params = {
-            "srcToken": token_in,
-            "destToken": token_out,
-            "amount": str(amount),
-            "network": str(chain_id),
+            "srcToken": request.token_in,
+            "srcDecimals": str(
+                request.token_in_decimals
+            ),
+            "destToken": request.token_out,
+            "destDecimals": str(
+                request.token_out_decimals
+            ),
+            "amount": str(request.amount),
+            "side": "SELL",
+            "network": str(request.chain_id),
+            "version": self.API_VERSION,
         }
 
-        headers = {
-            "Accept": "application/json",
-        }
+        if request.requester_address:
+            params["userAddress"] = (
+                request.requester_address
+            )
 
         try:
             status, data = await self._http_client.get(
-                url,
-                headers=headers,
+                self.BASE_URL,
                 params=params,
             )
 
@@ -124,9 +116,14 @@ class VeloraAggregator(AggregatorInterface):
                 "Velora returned a non-object response."
             )
 
-        price_route = data.get("priceRoute")
+        price_route = data.get(
+            "priceRoute"
+        )
 
-        if not isinstance(price_route, dict):
+        if not isinstance(
+            price_route,
+            dict,
+        ):
             raise AggregatorResponseError(
                 "Velora response does not contain "
                 "a valid priceRoute."
@@ -136,125 +133,79 @@ class VeloraAggregator(AggregatorInterface):
             price_route
         )
 
-        gas_estimate = self._extract_gas_estimate(
-            price_route
-        )
-
-        gas_cost_native = self._extract_gas_cost(
-            price_route
-        )
-
-        price_impact = self._extract_price_impact(
-            price_route
+        gas_estimate = self._parse_optional_int(
+            price_route.get("gasCost")
         )
 
         route = self._extract_route(
             price_route
         )
 
-        timestamp = price_route.get(
-            "timestamp",
+        block_number = price_route.get(
+            "blockNumber",
             "",
         )
 
         return Quote(
             aggregator=self.name,
-            chain_id=chain_id,
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount,
+            chain_id=request.chain_id,
+            token_in=request.token_in,
+            token_out=request.token_out,
+            amount_in=request.amount,
             amount_out=amount_out,
             gas_estimate=gas_estimate,
-            gas_cost_native=gas_cost_native,
-            price_impact=price_impact,
+            gas_cost_native=None,
+            price_impact=None,
             route=route,
-            timestamp=str(timestamp),
+            timestamp=str(block_number),
         )
 
     async def is_available(self) -> bool:
         """
         Check whether the HTTP client is available.
 
-        This does not send an additional API request.
+        This does not send an additional request.
         """
+
         return self._http_client is not None
 
     @staticmethod
     def _extract_amount_out(
         price_route: dict[str, Any],
     ) -> int:
-        """Extract destination amount."""
+        """Extract destination token amount."""
 
-        candidates = (
-            price_route.get("destAmount"),
-            price_route.get("destAmountAfterFee"),
+        value = price_route.get(
+            "destAmount"
         )
 
-        for value in candidates:
-            if value is None:
-                continue
+        if value is None:
+            raise AggregatorResponseError(
+                "Velora response does not contain "
+                "destAmount."
+            )
 
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
+        try:
+            return int(value)
 
-        raise AggregatorResponseError(
-            "Velora response does not contain "
-            "a valid destination amount."
-        )
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "Velora returned an invalid "
+                "destAmount."
+            ) from error
 
     @staticmethod
-    def _extract_gas_estimate(
-        price_route: dict[str, Any],
+    def _parse_optional_int(
+        value: Any,
     ) -> int | None:
-        """Extract gas usage when it is explicitly provided."""
-
-        candidates = (
-            price_route.get("gas"),
-            price_route.get("gasEstimate"),
-        )
-
-        for value in candidates:
-            if value is None:
-                continue
-
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
-
-        return None
-
-    @staticmethod
-    def _extract_gas_cost(
-        price_route: dict[str, Any],
-    ) -> Decimal | None:
-        """Extract gas cost when it is explicitly provided."""
-
-        value = price_route.get("gasCost")
+        """Convert an optional value to int."""
 
         if value is None:
             return None
 
         try:
-            return Decimal(str(value))
-        except (TypeError, ValueError):
-            return None
+            return int(value)
 
-    @staticmethod
-    def _extract_price_impact(
-        price_route: dict[str, Any],
-    ) -> Decimal | None:
-        """Extract price impact when it is provided."""
-
-        value = price_route.get("priceImpact")
-
-        if value is None:
-            return None
-
-        try:
-            return Decimal(str(value))
         except (TypeError, ValueError):
             return None
 
@@ -262,16 +213,80 @@ class VeloraAggregator(AggregatorInterface):
     def _extract_route(
         price_route: dict[str, Any],
     ) -> str | None:
-        """Extract a compact route description."""
+        """Extract exchange names from bestRoute."""
 
         best_route = price_route.get(
             "bestRoute"
         )
 
-        if best_route is None:
+        if not isinstance(
+            best_route,
+            list,
+        ):
             return None
 
-        if isinstance(best_route, str):
-            return best_route
+        exchanges: list[str] = []
 
-        return str(best_route)
+        for route_part in best_route:
+            if not isinstance(
+                route_part,
+                dict,
+            ):
+                continue
+
+            swaps = route_part.get(
+                "swaps"
+            )
+
+            if not isinstance(
+                swaps,
+                list,
+            ):
+                continue
+
+            for swap in swaps:
+                if not isinstance(
+                    swap,
+                    dict,
+                ):
+                    continue
+
+                swap_exchanges = swap.get(
+                    "swapExchanges"
+                )
+
+                if isinstance(
+                    swap_exchanges,
+                    list,
+                ):
+                    for exchange in swap_exchanges:
+                        if not isinstance(
+                            exchange,
+                            dict,
+                        ):
+                            continue
+
+                        name = exchange.get(
+                            "exchange"
+                        )
+
+                        if name:
+                            exchanges.append(
+                                str(name)
+                            )
+
+                exchange = swap.get(
+                    "exchange"
+                )
+
+                if exchange:
+                    exchanges.append(
+                        str(exchange)
+                    )
+
+        if not exchanges:
+            return None
+
+        return " → ".join(
+            dict.fromkeys(exchanges)
+        )
