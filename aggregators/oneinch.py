@@ -16,7 +16,9 @@ Does NOT:
 from decimal import Decimal
 from typing import Any
 
-from aggregators.aggregator_interface import AggregatorInterface
+from aggregators.aggregator_interface import (
+    AggregatorInterface,
+)
 from aggregators.errors import (
     AggregatorConfigurationError,
     AggregatorRateLimitError,
@@ -31,7 +33,9 @@ from aggregators.quote_request import QuoteRequest
 class OneInchAggregator(AggregatorInterface):
     """1inch Swap API adapter."""
 
-    BASE_URL = "https://api.1inch.dev/swap/v6.1"
+    BASE_URL = (
+        "https://api.1inch.dev/swap/v6.1"
+    )
 
     NAME = "1inch"
 
@@ -55,18 +59,54 @@ class OneInchAggregator(AggregatorInterface):
     @property
     def name(self) -> str:
         """Return the aggregator name."""
+
         return self.NAME
 
     @property
     def official_url(self) -> str:
         """Return the official 1inch website."""
+
         return self.OFFICIAL_URL
 
     async def get_quote(
         self,
-        request: QuoteRequest,
+        request: QuoteRequest | None = None,
+        **kwargs: Any,
     ) -> Quote:
-        """Request and normalize a 1inch quote."""
+        """
+        Request and normalize a 1inch quote.
+
+        The current API accepts QuoteRequest.
+
+        Legacy keyword arguments are supported for compatibility
+        with the existing aggregator tests and callers.
+        """
+
+        if request is None:
+            request = QuoteRequest(
+                chain_id=kwargs.pop(
+                    "chain_id"
+                ),
+                token_in=kwargs.pop(
+                    "token_in"
+                ),
+                token_out=kwargs.pop(
+                    "token_out"
+                ),
+                amount=kwargs.pop(
+                    "amount"
+                ),
+            )
+
+        if kwargs:
+            unexpected = ", ".join(
+                sorted(kwargs.keys())
+            )
+
+            raise TypeError(
+                "Unexpected get_quote arguments: "
+                f"{unexpected}"
+            )
 
         url = (
             f"{self.BASE_URL}"
@@ -87,10 +127,12 @@ class OneInchAggregator(AggregatorInterface):
         }
 
         try:
-            status, data = await self._http_client.get(
-                url,
-                headers=headers,
-                params=params,
+            status, data = (
+                await self._http_client.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                )
             )
 
         except Exception as error:
@@ -125,11 +167,15 @@ class OneInchAggregator(AggregatorInterface):
             data.get("gasCost")
         )
 
-        price_impact = self._parse_optional_decimal(
-            data.get("priceImpact")
+        price_impact = (
+            self._parse_optional_decimal(
+                data.get("priceImpact")
+            )
         )
 
-        route = self._extract_route(data)
+        route = self._extract_route(
+            data
+        )
 
         timestamp = data.get(
             "timestamp",
@@ -156,6 +202,7 @@ class OneInchAggregator(AggregatorInterface):
 
         This does not send an additional request.
         """
+
         return self._http_client is not None
 
     @staticmethod
@@ -164,7 +211,9 @@ class OneInchAggregator(AggregatorInterface):
     ) -> int:
         """Extract destination token amount."""
 
-        value = data.get("dstAmount")
+        value = data.get(
+            "dstAmount"
+        )
 
         if value is None:
             raise AggregatorResponseError(
@@ -174,6 +223,7 @@ class OneInchAggregator(AggregatorInterface):
 
         try:
             return int(value)
+
         except (TypeError, ValueError) as error:
             raise AggregatorResponseError(
                 "1inch returned an invalid dstAmount."
@@ -187,15 +237,18 @@ class OneInchAggregator(AggregatorInterface):
         """
         Convert gas cost from wei to native token units.
 
-        1inch returns gasCost in the smallest native-token
-        denomination. EVM native tokens use 18 decimals.
+        1inch returns gasCost in the smallest
+        native-token denomination.
         """
 
         if value is None:
             return None
 
         try:
-            gas_cost_wei = Decimal(str(value))
+            gas_cost_wei = Decimal(
+                str(value)
+            )
+
         except (TypeError, ValueError) as error:
             raise AggregatorResponseError(
                 "1inch returned an invalid gasCost."
@@ -218,6 +271,7 @@ class OneInchAggregator(AggregatorInterface):
 
         try:
             return int(value)
+
         except (TypeError, ValueError):
             return None
 
@@ -231,7 +285,10 @@ class OneInchAggregator(AggregatorInterface):
             return None
 
         try:
-            return Decimal(str(value))
+            return Decimal(
+                str(value)
+            )
+
         except (TypeError, ValueError):
             return None
 
@@ -241,12 +298,17 @@ class OneInchAggregator(AggregatorInterface):
     ) -> str | None:
         """Extract a compact route description."""
 
-        protocols = data.get("protocols")
+        protocols = data.get(
+            "protocols"
+        )
 
         if protocols is None:
             return None
 
-        if not isinstance(protocols, list):
+        if not isinstance(
+            protocols,
+            list,
+        ):
             return str(protocols)
 
         names: list[str] = []
@@ -255,10 +317,14 @@ class OneInchAggregator(AggregatorInterface):
             value: Any,
         ) -> None:
             if isinstance(value, dict):
-                name = value.get("name")
+                name = value.get(
+                    "name"
+                )
 
                 if name:
-                    names.append(str(name))
+                    names.append(
+                        str(name)
+                    )
 
                 for nested in value.values():
                     collect_names(nested)
@@ -276,4 +342,6 @@ class OneInchAggregator(AggregatorInterface):
             dict.fromkeys(names)
         )
 
-        return " → ".join(unique_names)
+        return " → ".join(
+            unique_names
+        )
