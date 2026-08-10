@@ -60,12 +60,14 @@ class NetProfitCalculator:
             net_profit_percent =
                 net_profit_usdt / amount_usdt * 100
         """
+
         if not isinstance(
             opportunity,
             ArbitrageOpportunity,
         ):
             raise TypeError(
-                "opportunity must be an ArbitrageOpportunity."
+                "opportunity must be an "
+                "ArbitrageOpportunity."
             )
 
         if not isinstance(
@@ -84,8 +86,8 @@ class NetProfitCalculator:
 
         if opportunity.amount_usdt <= 0:
             raise ValueError(
-                "opportunity.amount_usdt must be greater "
-                "than zero."
+                "opportunity.amount_usdt must be "
+                "greater than zero."
             )
 
         gross_profit_usdt = Decimal(
@@ -125,6 +127,7 @@ class NetProfitCalculator:
         Legacy compatibility alias for
         calculate_opportunity().
         """
+
         return self.calculate_opportunity(
             opportunity=opportunity,
             gas_cost=gas_cost,
