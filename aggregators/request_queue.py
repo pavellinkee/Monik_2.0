@@ -9,15 +9,12 @@ Rules:
     - Requests for the same aggregator are processed sequentially.
     - Rate limiting is handled by RateLimiter.
     - Different aggregators use different queues.
-    - Requests already being processed cannot be preempted.
-    - Among waiting requests, Stage 2 is always selected first.
 
 Does NOT:
     - make HTTP requests;
     - calculate opportunities;
     - decide scanner logic;
-    - send Telegram messages;
-    - implement rate limiting itself.
+    - send Telegram messages.
 """
 
 import asyncio
@@ -46,19 +43,7 @@ class _QueueItem:
 
 
 class AggregatorRequestQueue:
-    """
-    Priority queue for requests to one aggregator.
-
-    One queue instance belongs to one aggregator.
-
-    Example:
-
-        1inch → AggregatorRequestQueue
-        0x    → AggregatorRequestQueue
-        Velora → AggregatorRequestQueue
-
-    Each queue has its own RateLimiter.
-    """
+    """Priority queue for requests to one aggregator."""
 
     def __init__(
         self,
@@ -69,7 +54,7 @@ class AggregatorRequestQueue:
             RateLimiter,
         ):
             raise TypeError(
-                "rate_limiter must be a RateLimiter."
+                "rate_limiter must be a RateLimiter"
             )
 
         self._rate_limiter = rate_limiter
@@ -79,16 +64,15 @@ class AggregatorRequestQueue:
         ] = asyncio.PriorityQueue()
 
         self._sequence = 0
-
-        self._worker_task: (
-            asyncio.Task[None] | None
-        ) = None
+        self._worker_task: asyncio.Task[
+            None
+        ] | None = None
 
         self._stopping = False
 
     @property
     def is_running(self) -> bool:
-        """Return whether the queue worker is running."""
+        """Return whether the worker is running."""
 
         return (
             self._worker_task is not None
@@ -97,16 +81,12 @@ class AggregatorRequestQueue:
 
     @property
     def pending_count(self) -> int:
-        """Return the number of requests waiting in the queue."""
+        """Return the number of queued requests."""
 
         return self._queue.qsize()
 
     async def start(self) -> None:
-        """
-        Start the queue worker.
-
-        Calling start() multiple times is safe.
-        """
+        """Start the queue worker."""
 
         if self.is_running:
             return
@@ -121,34 +101,30 @@ class AggregatorRequestQueue:
         """
         Stop the queue worker.
 
-        Pending requests that have not started are cancelled.
-        A request currently being executed is cancelled together
-        with the worker task.
+        All pending requests are cancelled.
+        The queue can be started again afterwards.
         """
 
-        if self._worker_task is None:
+        worker = self._worker_task
+
+        if worker is None:
             self._cancel_pending_requests()
-
-            self._stopping = True
-
+            self._stopping = False
             return
 
         self._stopping = True
 
-        self._cancel_pending_requests()
-
-        worker_task = self._worker_task
-
-        worker_task.cancel()
+        worker.cancel()
 
         try:
-            await worker_task
-
+            await worker
         except asyncio.CancelledError:
             pass
 
-        finally:
-            self._worker_task = None
+        self._cancel_pending_requests()
+
+        self._worker_task = None
+        self._stopping = False
 
     async def submit(
         self,
@@ -156,31 +132,35 @@ class AggregatorRequestQueue:
         stage: int,
     ) -> Any:
         """
-        Add a request to the queue and wait for its result.
+        Add a request to the queue.
 
-        Stage 2 has higher priority than Stage 1.
-
-        Requests with the same priority are processed in
-        FIFO order.
-
-        The request itself is an async callable with no arguments.
+        Stage 2 receives higher priority than Stage 1.
         """
 
         if not callable(request):
             raise TypeError(
-                "request must be callable."
+                "request must be callable"
             )
 
-        priority = self._get_priority(stage)
+        if stage == 2:
+            priority = STAGE_2_PRIORITY
+
+        elif stage == 1:
+            priority = STAGE_1_PRIORITY
+
+        else:
+            raise ValueError(
+                "stage must be 1 or 2"
+            )
+
+        if not self.is_running:
+            await self.start()
 
         if self._stopping:
             raise RuntimeError(
                 "Cannot submit request: "
                 "queue is stopping."
             )
-
-        if not self.is_running:
-            await self.start()
 
         loop = asyncio.get_running_loop()
 
@@ -203,7 +183,8 @@ class AggregatorRequestQueue:
 
     async def wait_until_empty(self) -> None:
         """
-        Wait until all currently queued requests are processed.
+        Wait until all currently queued requests
+        have been processed.
         """
 
         await self._queue.join()
@@ -211,74 +192,51 @@ class AggregatorRequestQueue:
     async def _worker(self) -> None:
         """Process queued requests sequentially."""
 
-        while True:
-            item = await self._queue.get()
+        try:
+            while True:
+                item = await self._queue.get()
 
-            try:
-                if item.future.cancelled():
-                    continue
+                try:
+                    await self._rate_limiter.wait()
 
-                await self._rate_limiter.wait()
+                    result = await item.request()
 
-                if item.future.cancelled():
-                    continue
+                    if not item.future.done():
+                        item.future.set_result(
+                            result
+                        )
 
-                result = await item.request()
+                except asyncio.CancelledError:
+                    if not item.future.done():
+                        item.future.cancel()
 
-                if not item.future.done():
-                    item.future.set_result(
-                        result
-                    )
+                    raise
 
-            except asyncio.CancelledError:
-                if not item.future.done():
-                    item.future.cancel()
+                except Exception as error:
+                    if not item.future.done():
+                        item.future.set_exception(
+                            error
+                        )
 
-                raise
+                finally:
+                    self._queue.task_done()
 
-            except Exception as error:
-                if not item.future.done():
-                    item.future.set_exception(
-                        error
-                    )
-
-            finally:
-                self._queue.task_done()
-
-    @staticmethod
-    def _get_priority(
-        stage: int,
-    ) -> int:
-        """Convert scanner stage to queue priority."""
-
-        if stage == 2:
-            return STAGE_2_PRIORITY
-
-        if stage == 1:
-            return STAGE_1_PRIORITY
-
-        raise ValueError(
-            "stage must be 1 or 2"
-        )
+        except asyncio.CancelledError:
+            raise
 
     def _cancel_pending_requests(self) -> None:
         """
-        Cancel all requests that are still waiting in the queue.
-
-        The currently executing request is handled by cancellation
-        of the worker task.
+        Cancel all requests still waiting in the queue.
         """
 
         while True:
             try:
                 item = self._queue.get_nowait()
-
             except asyncio.QueueEmpty:
                 break
 
             try:
                 if not item.future.done():
                     item.future.cancel()
-
             finally:
                 self._queue.task_done()
