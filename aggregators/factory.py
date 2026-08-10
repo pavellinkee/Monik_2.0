@@ -4,6 +4,12 @@ Aggregator factory.
 Responsibility:
     Creates configured aggregator adapter instances.
 
+Supports:
+    - the existing configuration pipeline;
+    - the shared HttpClient;
+    - HttpClientManager-based creation;
+    - AggregatorRegistry-based implementation lookup.
+
 Does NOT:
     - make API requests;
     - control rate limits;
@@ -21,12 +27,9 @@ from aggregators.aggregator_interface import AggregatorInterface
 from aggregators.errors import (
     AggregatorConfigurationError,
 )
-from aggregators.http_client_manager import (
-    HttpClientManager,
-)
-from aggregators.registry import (
-    AggregatorRegistry,
-)
+from aggregators.http_client import HttpClient
+from aggregators.http_client_manager import HttpClientManager
+from aggregators.registry import AggregatorRegistry
 
 
 class AggregatorFactory:
@@ -34,9 +37,21 @@ class AggregatorFactory:
 
     def __init__(
         self,
-        http_client_manager: HttpClientManager,
+        http_client: HttpClient | None = None,
+        *,
+        http_client_manager: HttpClientManager | None = None,
         registry: AggregatorRegistry | None = None,
     ):
+        if (
+            http_client is None
+            and http_client_manager is None
+        ):
+            raise ValueError(
+                "Either http_client or "
+                "http_client_manager must be provided."
+            )
+
+        self._http_client = http_client
         self._http_client_manager = (
             http_client_manager
         )
@@ -54,28 +69,43 @@ class AggregatorFactory:
         return self._registry
 
     @property
+    def http_client(self) -> HttpClient | None:
+        """Return the shared HTTP client."""
+
+        return self._http_client
+
+    @property
     def http_client_manager(
         self,
-    ) -> HttpClientManager:
+    ) -> HttpClientManager | None:
         """Return the HTTP client manager."""
 
         return self._http_client_manager
 
-    def create(
+    def _get_http_client(
+        self,
+        name: str,
+    ) -> HttpClient:
+        """Resolve the HTTP client for an aggregator."""
+
+        if self._http_client_manager is not None:
+            return self._http_client_manager.get_or_create(
+                name
+            )
+
+        if self._http_client is not None:
+            return self._http_client
+
+        raise RuntimeError(
+            "No HTTP client source is configured."
+        )
+
+    def _create_one(
         self,
         name: str,
         config: Any,
     ) -> AggregatorInterface:
-        """
-        Create one configured aggregator.
-
-        Args:
-            name:
-                Internal aggregator identifier.
-
-            config:
-                AggregatorConfig-compatible object.
-        """
+        """Create one configured aggregator."""
 
         definition = self._registry.get(name)
 
@@ -109,10 +139,8 @@ class AggregatorFactory:
                     f"an API key."
                 )
 
-        client = (
-            self._http_client_manager.get_or_create(
-                name
-            )
+        http_client = self._get_http_client(
+            name
         )
 
         implementation = (
@@ -121,12 +149,51 @@ class AggregatorFactory:
 
         if definition.requires_api_key:
             return implementation(
-                http_client=client,
+                http_client=http_client,
                 api_key=api_key,
             )
 
         return implementation(
-            http_client=client,
+            http_client=http_client,
+        )
+
+    def create(
+        self,
+        name_or_configs: str | dict[str, Any],
+        config: Any | None = None,
+    ) -> (
+        AggregatorInterface
+        | dict[str, AggregatorInterface]
+    ):
+        """
+        Create one aggregator or all configured aggregators.
+
+        Supported forms:
+
+            create("1inch", config)
+
+        or:
+
+            create(config.aggregators)
+        """
+
+        if isinstance(
+            name_or_configs,
+            dict,
+        ):
+            return self.create_enabled(
+                name_or_configs
+            )
+
+        if config is None:
+            raise TypeError(
+                "config is required when creating "
+                "a single aggregator."
+            )
+
+        return self._create_one(
+            name_or_configs,
+            config,
         )
 
     def create_enabled(
@@ -173,7 +240,7 @@ class AggregatorFactory:
             )
 
             if enabled:
-                result[name] = self.create(
+                result[name] = self._create_one(
                     name,
                     config,
                 )
