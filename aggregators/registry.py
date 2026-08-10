@@ -2,119 +2,176 @@
 Aggregator registry.
 
 Responsibility:
-    Stores initialized aggregator adapters and provides
-    a single access point for the rest of the application.
+    Stores the available aggregator implementations and their
+    static metadata.
 
 Does NOT:
     - create HTTP clients;
-    - read user configuration;
+    - load user configuration;
     - store API keys;
-    - perform HTTP requests;
-    - apply rate limits;
-    - implement Stage 1;
-    - implement Stage 2;
-    - calculate arbitrage opportunities.
+    - create aggregator instances;
+    - control rate limits;
+    - run scanner stages.
 """
 
-from collections.abc import Iterable
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Type
 
 from aggregators.aggregator_interface import AggregatorInterface
+from aggregators.oneinch import OneInchAggregator
+from aggregators.uniswap import UniswapAggregator
+from aggregators.velora import VeloraAggregator
+from aggregators.zero_x import ZeroXAggregator
+
+
+@dataclass(frozen=True)
+class AggregatorDefinition:
+    """Static definition of one supported aggregator."""
+
+    name: str
+    implementation: Type[AggregatorInterface]
+    requires_api_key: bool
+    official_url: str
 
 
 class AggregatorRegistry:
-    """Registry of initialized aggregator adapters."""
+    """Registry of supported aggregator implementations."""
 
-    def __init__(
-        self,
-        aggregators: Iterable[AggregatorInterface],
-    ):
-        self._aggregators: dict[
+    def __init__(self) -> None:
+        self._definitions: dict[
             str,
-            AggregatorInterface,
+            AggregatorDefinition,
         ] = {}
 
-        for aggregator in aggregators:
-            self.register(aggregator)
+        self._register_defaults()
+
+    def _register_defaults(self) -> None:
+        """Register all officially supported aggregators."""
+
+        self.register(
+            AggregatorDefinition(
+                name="1inch",
+                implementation=OneInchAggregator,
+                requires_api_key=True,
+                official_url=(
+                    "https://1inch.com"
+                ),
+            )
+        )
+
+        self.register(
+            AggregatorDefinition(
+                name="0x",
+                implementation=ZeroXAggregator,
+                requires_api_key=True,
+                official_url=(
+                    "https://0x.org"
+                ),
+            )
+        )
+
+        self.register(
+            AggregatorDefinition(
+                name="Uniswap",
+                implementation=UniswapAggregator,
+                requires_api_key=True,
+                official_url=(
+                    "https://uniswap.org"
+                ),
+            )
+        )
+
+        self.register(
+            AggregatorDefinition(
+                name="Velora",
+                implementation=VeloraAggregator,
+                requires_api_key=False,
+                official_url=(
+                    "https://velora.xyz"
+                ),
+            )
+        )
 
     def register(
         self,
-        aggregator: AggregatorInterface,
+        definition: AggregatorDefinition,
     ) -> None:
-        """
-        Register an aggregator.
+        """Register an aggregator definition."""
 
-        Aggregator names must be unique.
-        """
         if not isinstance(
-            aggregator,
-            AggregatorInterface,
+            definition,
+            AggregatorDefinition,
         ):
             raise TypeError(
-                "aggregator must implement "
-                "AggregatorInterface."
+                "definition must be an "
+                "AggregatorDefinition."
             )
 
-        name = aggregator.name
-
-        if not name:
+        if not definition.name.strip():
             raise ValueError(
                 "Aggregator name cannot be empty."
             )
 
-        if name in self._aggregators:
+        if definition.name in self._definitions:
             raise ValueError(
-                f"Aggregator '{name}' is already registered."
+                f"Aggregator '{definition.name}' "
+                f"is already registered."
             )
 
-        self._aggregators[name] = aggregator
+        self._definitions[
+            definition.name
+        ] = definition
 
     def get(
         self,
         name: str,
-    ) -> AggregatorInterface:
-        """
-        Return an aggregator by name.
+    ) -> AggregatorDefinition:
+        """Return a registered aggregator definition."""
 
-        Raises:
-            KeyError: if the aggregator is not registered.
-        """
         try:
-            return self._aggregators[name]
-        except KeyError as error:
+            return self._definitions[name]
+
+        except KeyError:
             raise KeyError(
-                f"Aggregator '{name}' is not registered."
-            ) from error
-
-    def all(
-        self,
-    ) -> tuple[AggregatorInterface, ...]:
-        """Return all registered aggregators."""
-        return tuple(
-            self._aggregators.values()
-        )
-
-    def names(
-        self,
-    ) -> tuple[str, ...]:
-        """Return registered aggregator names."""
-        return tuple(
-            self._aggregators.keys()
-        )
+                f"Unknown aggregator: '{name}'."
+            ) from None
 
     def contains(
         self,
         name: str,
     ) -> bool:
-        """Check whether an aggregator is registered."""
-        return name in self._aggregators
+        """Return whether an aggregator is registered."""
 
-    def official_url(
+        return name in self._definitions
+
+    def names(self) -> tuple[str, ...]:
+        """Return registered aggregator names."""
+
+        return tuple(
+            self._definitions.keys()
+        )
+
+    def all(
+        self,
+    ) -> tuple[AggregatorDefinition, ...]:
+        """Return all registered definitions."""
+
+        return tuple(
+            self._definitions.values()
+        )
+
+    def remove(
         self,
         name: str,
-    ) -> str:
-        """Return the official URL of an aggregator."""
-        return self.get(name).official_url
+    ) -> AggregatorDefinition:
+        """Remove and return an aggregator definition."""
 
-    def __len__(self) -> int:
-        """Return the number of registered aggregators."""
-        return len(self._aggregators)
+        try:
+            return self._definitions.pop(name)
+
+        except KeyError:
+            raise KeyError(
+                f"Unknown aggregator: '{name}'."
+            ) from None
