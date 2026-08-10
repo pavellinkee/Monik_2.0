@@ -16,7 +16,9 @@ Does NOT:
 from decimal import Decimal
 from typing import Any
 
-from aggregators.aggregator_interface import AggregatorInterface
+from aggregators.aggregator_interface import (
+    AggregatorInterface,
+)
 from aggregators.errors import (
     AggregatorConfigurationError,
     AggregatorRateLimitError,
@@ -26,6 +28,11 @@ from aggregators.errors import (
 from aggregators.http_client import HttpClient
 from aggregators.quote import Quote
 from aggregators.quote_request import QuoteRequest
+
+
+LEGACY_REQUESTER_ADDRESS = (
+    "0x0000000000000000000000000000000000000001"
+)
 
 
 class UniswapAggregator(AggregatorInterface):
@@ -56,22 +63,63 @@ class UniswapAggregator(AggregatorInterface):
     @property
     def name(self) -> str:
         """Return the aggregator name."""
+
         return self.NAME
 
     @property
     def official_url(self) -> str:
         """Return the official Uniswap website."""
+
         return self.OFFICIAL_URL
 
     async def get_quote(
         self,
-        request: QuoteRequest,
+        request: QuoteRequest | None = None,
+        **kwargs: Any,
     ) -> Quote:
-        """Request and normalize a Uniswap quote."""
+        """
+        Request and normalize a Uniswap quote.
+
+        QuoteRequest is the primary interface.
+
+        Legacy keyword arguments are supported for
+        existing compatibility callers.
+        """
+
+        if request is None:
+            request = QuoteRequest(
+                chain_id=kwargs.pop(
+                    "chain_id"
+                ),
+                token_in=kwargs.pop(
+                    "token_in"
+                ),
+                token_out=kwargs.pop(
+                    "token_out"
+                ),
+                amount=kwargs.pop(
+                    "amount"
+                ),
+                requester_address=kwargs.pop(
+                    "requester_address",
+                    LEGACY_REQUESTER_ADDRESS,
+                ),
+            )
+
+        if kwargs:
+            unexpected = ", ".join(
+                sorted(kwargs.keys())
+            )
+
+            raise TypeError(
+                "Unexpected get_quote arguments: "
+                f"{unexpected}"
+            )
 
         if not request.requester_address:
             raise AggregatorConfigurationError(
-                "Uniswap quote requires requester_address."
+                "Uniswap quote requires "
+                "requester_address."
             )
 
         headers = {
@@ -83,7 +131,9 @@ class UniswapAggregator(AggregatorInterface):
 
         payload = {
             "type": "EXACT_INPUT",
-            "amount": str(request.amount),
+            "amount": str(
+                request.amount
+            ),
             "tokenInChainId": request.chain_id,
             "tokenOutChainId": request.chain_id,
             "tokenIn": request.token_in,
@@ -92,10 +142,12 @@ class UniswapAggregator(AggregatorInterface):
         }
 
         try:
-            status, data = await self._http_client.post(
-                self.BASE_URL,
-                headers=headers,
-                json=payload,
+            status, data = (
+                await self._http_client.post(
+                    self.BASE_URL,
+                    headers=headers,
+                    json=payload,
+                )
             )
 
         except Exception as error:
@@ -118,43 +170,80 @@ class UniswapAggregator(AggregatorInterface):
                 "Uniswap returned a non-object response."
             )
 
-        quote_data = data.get("quote")
+        quote_data = data.get(
+            "quote"
+        )
 
-        if not isinstance(
+        if isinstance(
             quote_data,
             dict,
         ):
-            raise AggregatorResponseError(
-                "Uniswap response does not contain "
-                "a valid quote object."
+            amount_out = (
+                self._extract_amount_out(
+                    quote_data
+                )
             )
 
-        amount_out = self._extract_amount_out(
-            quote_data
-        )
+            gas_estimate = (
+                self._extract_gas_estimate(
+                    data
+                )
+            )
 
-        gas_estimate = self._extract_gas_estimate(
-            data
-        )
+            gas_cost_native = (
+                self._extract_gas_cost(
+                    data
+                )
+            )
 
-        gas_cost_native = self._extract_gas_cost(
-            data
-        )
+            routing = data.get(
+                "routing"
+            )
 
-        routing = data.get(
-            "routing"
-        )
+            route = (
+                str(routing)
+                if routing
+                else None
+            )
 
-        route = (
-            str(routing)
-            if routing
-            else None
-        )
+            timestamp = data.get(
+                "requestId",
+                "",
+            )
 
-        request_id = data.get(
-            "requestId",
-            "",
-        )
+        else:
+            amount_out = (
+                self._extract_legacy_amount_out(
+                    data
+                )
+            )
+
+            gas_estimate = (
+                self._parse_optional_int(
+                    data.get("gas")
+                )
+            )
+
+            gas_cost_native = (
+                self._extract_legacy_gas_cost(
+                    data.get("gasCost")
+                )
+            )
+
+            route_value = data.get(
+                "route"
+            )
+
+            route = (
+                str(route_value)
+                if route_value
+                else None
+            )
+
+            timestamp = data.get(
+                "timestamp",
+                "",
+            )
 
         return Quote(
             aggregator=self.name,
@@ -165,17 +254,17 @@ class UniswapAggregator(AggregatorInterface):
             amount_out=amount_out,
             gas_estimate=gas_estimate,
             gas_cost_native=gas_cost_native,
-            price_impact=None,
+            price_impact=(
+                self._parse_optional_decimal(
+                    data.get("priceImpact")
+                )
+            ),
             route=route,
-            timestamp=str(request_id),
+            timestamp=str(timestamp),
         )
 
     async def is_available(self) -> bool:
-        """
-        Check whether the HTTP client is available.
-
-        This does not send an additional request.
-        """
+        """Check whether the HTTP client is available."""
 
         return self._http_client is not None
 
@@ -185,16 +274,26 @@ class UniswapAggregator(AggregatorInterface):
     ) -> int:
         """Extract output amount from a Uniswap quote."""
 
-        output = quote_data.get("output")
+        output = quote_data.get(
+            "output"
+        )
 
-        if isinstance(output, dict):
-            value = output.get("amount")
+        if isinstance(
+            output,
+            dict,
+        ):
+            value = output.get(
+                "amount"
+            )
 
             if value is not None:
                 try:
                     return int(value)
 
-                except (TypeError, ValueError) as error:
+                except (
+                    TypeError,
+                    ValueError,
+                ) as error:
                     raise AggregatorResponseError(
                         "Uniswap returned an invalid "
                         "output amount."
@@ -212,11 +311,10 @@ class UniswapAggregator(AggregatorInterface):
                 "outputs"
             )
 
-            if isinstance(
-                outputs,
-                list,
-            ) and outputs:
-
+            if (
+                isinstance(outputs, list)
+                and outputs
+            ):
                 first_output = outputs[0]
 
                 if isinstance(
@@ -246,6 +344,34 @@ class UniswapAggregator(AggregatorInterface):
         )
 
     @staticmethod
+    def _extract_legacy_amount_out(
+        data: dict[str, Any],
+    ) -> int:
+        """Extract output amount from the legacy response."""
+
+        value = data.get(
+            "amountOut"
+        )
+
+        if value is None:
+            raise AggregatorResponseError(
+                "Uniswap response does not contain "
+                "amountOut."
+            )
+
+        try:
+            return int(value)
+
+        except (
+            TypeError,
+            ValueError,
+        ) as error:
+            raise AggregatorResponseError(
+                "Uniswap returned an invalid "
+                "amountOut."
+            ) from error
+
+    @staticmethod
     def _extract_gas_estimate(
         data: dict[str, Any],
     ) -> int | None:
@@ -271,7 +397,10 @@ class UniswapAggregator(AggregatorInterface):
         try:
             return int(value)
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
             return None
 
     @staticmethod
@@ -281,7 +410,8 @@ class UniswapAggregator(AggregatorInterface):
         """
         Extract total estimated gas cost.
 
-        Uniswap provides this value in the chain's base unit.
+        Uniswap provides this value in the
+        chain's base unit.
         """
 
         value = data.get(
@@ -292,12 +422,80 @@ class UniswapAggregator(AggregatorInterface):
             return None
 
         try:
-            return Decimal(str(value)) / Decimal(
+            return Decimal(
+                str(value)
+            ) / Decimal(
                 10 ** 18
             )
 
-        except (TypeError, ValueError) as error:
+        except (
+            TypeError,
+            ValueError,
+        ) as error:
             raise AggregatorResponseError(
                 "Uniswap returned an invalid "
                 "permitGasFee."
             ) from error
+
+    @staticmethod
+    def _extract_legacy_gas_cost(
+        value: Any,
+    ) -> Decimal | None:
+        """Convert legacy gasCost from wei to native units."""
+
+        if value is None:
+            return None
+
+        try:
+            return Decimal(
+                str(value)
+            ) / Decimal(
+                10 ** 18
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ) as error:
+            raise AggregatorResponseError(
+                "Uniswap returned an invalid "
+                "gasCost."
+            ) from error
+
+    @staticmethod
+    def _parse_optional_int(
+        value: Any,
+    ) -> int | None:
+        """Convert an optional value to int."""
+
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+    @staticmethod
+    def _parse_optional_decimal(
+        value: Any,
+    ) -> Decimal | None:
+        """Convert an optional value to Decimal."""
+
+        if value is None:
+            return None
+
+        try:
+            return Decimal(
+                str(value)
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
