@@ -11,7 +11,8 @@ Features:
     - maximum interval;
     - rate-limit backoff;
     - optional Retry-After support;
-    - reset to standard values.
+    - reset to standard values;
+    - backward-compatible constructor aliases.
 
 Does NOT:
     - make HTTP requests;
@@ -30,33 +31,84 @@ class RateLimiter:
 
     def __init__(
         self,
-        standard_interval: float,
-        max_interval: float,
-        backoff_multiplier: float = 1.5,
+        standard_interval: float | None = None,
+        max_interval: float | None = None,
+        backoff_multiplier: float | None = None,
         requests_per_minute: int | None = None,
+        *,
+        initial_delay_seconds: float | None = None,
+        max_delay_seconds: float | None = None,
+        delay_multiplier: float | None = None,
     ):
         """
         Initialize the rate limiter.
 
-        Args:
-            standard_interval:
-                Initial minimum interval between requests.
+        Preferred API:
+            standard_interval
+            max_interval
+            backoff_multiplier
+            requests_per_minute
 
-            max_interval:
-                Maximum adaptive interval.
+        Backward-compatible API:
+            initial_delay_seconds
+            max_delay_seconds
+            delay_multiplier
 
-            backoff_multiplier:
-                Multiplier applied after a rate-limit response.
-
-            requests_per_minute:
-                Optional hard request-rate limit.
-
-                When provided, the limiter guarantees that the
-                interval cannot be shorter than 60 / RPM.
-
-                This parameter is optional for backward compatibility
-                with the existing code.
+        The backward-compatible names are intentionally supported because
+        existing modules and tests may still use the previous interface.
         """
+
+        # ------------------------------------------------------------
+        # Backward-compatible constructor aliases
+        # ------------------------------------------------------------
+
+        if initial_delay_seconds is not None:
+            if standard_interval is not None:
+                raise TypeError(
+                    "Specify only one of "
+                    "standard_interval and initial_delay_seconds."
+                )
+
+            standard_interval = initial_delay_seconds
+
+        if max_delay_seconds is not None:
+            if max_interval is not None:
+                raise TypeError(
+                    "Specify only one of "
+                    "max_interval and max_delay_seconds."
+                )
+
+            max_interval = max_delay_seconds
+
+        if delay_multiplier is not None:
+            if backoff_multiplier is not None:
+                raise TypeError(
+                    "Specify only one of "
+                    "backoff_multiplier and delay_multiplier."
+                )
+
+            backoff_multiplier = delay_multiplier
+
+        # ------------------------------------------------------------
+        # Required arguments
+        # ------------------------------------------------------------
+
+        if standard_interval is None:
+            raise TypeError(
+                "standard_interval is required."
+            )
+
+        if max_interval is None:
+            raise TypeError(
+                "max_interval is required."
+            )
+
+        if backoff_multiplier is None:
+            backoff_multiplier = 1.5
+
+        # ------------------------------------------------------------
+        # Validation
+        # ------------------------------------------------------------
 
         if standard_interval < 0:
             raise ValueError(
@@ -92,6 +144,10 @@ class RateLimiter:
                     "standard interval"
                 )
 
+        # ------------------------------------------------------------
+        # Internal state
+        # ------------------------------------------------------------
+
         self._standard_interval = standard_interval
         self._max_interval = max_interval
         self._backoff_multiplier = backoff_multiplier
@@ -105,21 +161,25 @@ class RateLimiter:
     @property
     def standard_interval(self) -> float:
         """Return the effective standard interval."""
+
         return self._standard_interval
 
     @property
     def current_interval(self) -> float:
         """Return the current adaptive interval."""
+
         return self._current_interval
 
     @property
     def max_interval(self) -> float:
         """Return the configured maximum interval."""
+
         return self._max_interval
 
     @property
     def requests_per_minute(self) -> int | None:
         """Return the configured RPM limit."""
+
         return self._requests_per_minute
 
     async def wait(self) -> None:
@@ -189,9 +249,6 @@ class RateLimiter:
     def reset(self) -> None:
         """
         Reset adaptive state to standard values.
-
-        This is intended to be called at the beginning of a new
-        scanning cycle.
 
         The next request will therefore use the standard interval.
         """
