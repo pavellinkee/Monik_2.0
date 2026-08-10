@@ -38,12 +38,19 @@ def create_rate_limit(
 ) -> AggregatorRateLimitConfig:
     """Create a test rate-limit configuration."""
 
+    standard_interval = (
+        60.0 / requests_per_minute
+    )
+
     return AggregatorRateLimitConfig(
         requests_per_minute=requests_per_minute,
         initial_delay_seconds=0.0,
         adaptive_delay_enabled=True,
         delay_multiplier=1.5,
-        max_delay_seconds=1.0,
+        max_delay_seconds=max(
+            5.0,
+            standard_interval * 2,
+        ),
     )
 
 
