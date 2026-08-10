@@ -18,6 +18,7 @@ from typing import Any
 
 from aggregators.aggregator_interface import (
     AggregatorInterface,
+    QuoteRequest,
 )
 from aggregators.errors import (
     AggregatorRateLimitError,
@@ -32,10 +33,9 @@ class VeloraAggregator(AggregatorInterface):
     """Velora API adapter."""
 
     BASE_URL = "https://api.paraswap.io"
-
     NAME = "Velora"
-
     OFFICIAL_URL = "https://velora.xyz"
+    API_VERSION = "6.2"
 
     def __init__(
         self,
@@ -48,42 +48,47 @@ class VeloraAggregator(AggregatorInterface):
     @property
     def name(self) -> str:
         """Return the aggregator name."""
-
         return self.NAME
 
     @property
     def official_url(self) -> str:
         """Return the official Velora website."""
-
         return self.OFFICIAL_URL
 
     async def get_quote(
         self,
-        chain_id: int,
-        token_in: str,
-        token_out: str,
-        amount: int,
+        request: QuoteRequest,
     ) -> Quote:
         """Request and normalize a Velora quote."""
 
-        if chain_id <= 0:
+        if request.chain_id <= 0:
             raise ValueError(
                 "chain_id must be greater than 0"
             )
 
-        if not token_in:
+        if not request.token_in:
             raise ValueError(
                 "token_in is required"
             )
 
-        if not token_out:
+        if not request.token_out:
             raise ValueError(
                 "token_out is required"
             )
 
-        if amount <= 0:
+        if request.amount <= 0:
             raise ValueError(
                 "amount must be greater than 0"
+            )
+
+        if request.token_in_decimals is None:
+            raise ValueError(
+                "token_in_decimals is required"
+            )
+
+        if request.token_out_decimals is None:
+            raise ValueError(
+                "token_out_decimals is required"
             )
 
         url = f"{self.BASE_URL}/prices"
@@ -96,12 +101,18 @@ class VeloraAggregator(AggregatorInterface):
             headers["X-API-KEY"] = self._api_key
 
         params = {
-            "srcToken": token_in,
-            "destToken": token_out,
-            "amount": str(amount),
-            "network": str(chain_id),
+            "srcToken": request.token_in,
+            "srcDecimals": request.token_in_decimals,
+            "destToken": request.token_out,
+            "destDecimals": request.token_out_decimals,
+            "amount": str(request.amount),
+            "network": str(request.chain_id),
             "side": "SELL",
+            "version": self.API_VERSION,
         }
+
+        if request.requester_address:
+            params["userAddress"] = request.requester_address
 
         try:
             status, data = await self._http_client.get(
@@ -164,10 +175,10 @@ class VeloraAggregator(AggregatorInterface):
 
         return Quote(
             aggregator=self.name,
-            chain_id=chain_id,
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount,
+            chain_id=request.chain_id,
+            token_in=request.token_in,
+            token_out=request.token_out,
+            amount_in=request.amount,
             amount_out=amount_out,
             gas_estimate=gas_estimate,
             gas_cost_native=gas_cost_native,
@@ -178,7 +189,6 @@ class VeloraAggregator(AggregatorInterface):
 
     async def is_available(self) -> bool:
         """Check whether the HTTP client is available."""
-
         return self._http_client is not None
 
     @staticmethod
