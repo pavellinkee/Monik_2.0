@@ -64,15 +64,7 @@ class VeloraAggregator(AggregatorInterface):
         token_out: str,
         amount: int,
     ) -> Quote:
-        """
-        Request and normalize a Velora quote.
-
-        The adapter uses the common aggregator interface:
-            chain_id
-            token_in
-            token_out
-            amount
-        """
+        """Request and normalize a Velora quote."""
 
         if chain_id <= 0:
             raise ValueError(
@@ -94,18 +86,14 @@ class VeloraAggregator(AggregatorInterface):
                 "amount must be greater than 0"
             )
 
-        url = (
-            f"{self.BASE_URL}/prices"
-        )
+        url = f"{self.BASE_URL}/prices"
 
         headers = {
             "Accept": "application/json",
         }
 
         if self._api_key:
-            headers["X-API-KEY"] = (
-                self._api_key
-            )
+            headers["X-API-KEY"] = self._api_key
 
         params = {
             "srcToken": token_in,
@@ -116,14 +104,11 @@ class VeloraAggregator(AggregatorInterface):
         }
 
         try:
-            status, data = (
-                await self._http_client.get(
-                    url,
-                    headers=headers,
-                    params=params,
-                )
+            status, data = await self._http_client.get(
+                url,
+                headers=headers,
+                params=params,
             )
-
         except Exception as error:
             raise AggregatorRequestError(
                 f"Velora request failed: {error}"
@@ -136,39 +121,157 @@ class VeloraAggregator(AggregatorInterface):
 
         if status >= 400:
             raise AggregatorRequestError(
-                f"Velora returned HTTP "
-                f"{status}: {data}"
+                f"Velora returned HTTP {status}: {data}"
             )
 
-        if not isinstance(
-            data,
-            dict,
-        ):
+        if not isinstance(data, dict):
             raise AggregatorResponseError(
-                "Velora returned a non-object "
-                "response."
+                "Velora returned a non-object response."
             )
 
-        price_route = data.get(
-            "priceRoute"
-        )
+        price_route = data.get("priceRoute")
 
-        if not isinstance(
-            price_route,
-            dict,
-        ):
+        if not isinstance(price_route, dict):
             raise AggregatorResponseError(
                 "Velora response does not contain "
                 "a valid priceRoute."
             )
 
-        amount_out = (
-            self._extract_amount_out(
-                price_route
-            )
+        amount_out = self._extract_amount_out(
+            price_route
         )
 
-        gas_estimate = (
-            self._parse_optional_int(
-                price_route.get("gas")
+        gas_estimate = self._parse_optional_int(
+            price_route.get("gas")
+        )
+
+        gas_cost_native = self._parse_optional_decimal(
+            price_route.get("gasCost")
+        )
+
+        price_impact = self._parse_optional_decimal(
+            price_route.get("priceImpact")
+        )
+
+        route = self._extract_route(
+            price_route
+        )
+
+        timestamp = price_route.get(
+            "timestamp",
+            data.get("timestamp", ""),
+        )
+
+        return Quote(
+            aggregator=self.name,
+            chain_id=chain_id,
+            token_in=token_in,
+            token_out=token_out,
+            amount_in=amount,
+            amount_out=amount_out,
+            gas_estimate=gas_estimate,
+            gas_cost_native=gas_cost_native,
+            price_impact=price_impact,
+            route=route,
+            timestamp=str(timestamp),
+        )
+
+    async def is_available(self) -> bool:
+        """Check whether the HTTP client is available."""
+
+        return self._http_client is not None
+
+    @staticmethod
+    def _extract_amount_out(
+        price_route: dict[str, Any],
+    ) -> int:
+        """Extract destination token amount."""
+
+        value = price_route.get("destAmount")
+
+        if value is None:
+            raise AggregatorResponseError(
+                "Velora response does not contain "
+                "destAmount."
             )
+
+        try:
+            return int(value)
+        except (TypeError, ValueError) as error:
+            raise AggregatorResponseError(
+                "Velora returned an invalid "
+                "destAmount."
+            ) from error
+
+    @staticmethod
+    def _parse_optional_int(
+        value: Any,
+    ) -> int | None:
+        """Convert an optional value to int."""
+
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_optional_decimal(
+        value: Any,
+    ) -> Decimal | None:
+        """Convert an optional value to Decimal."""
+
+        if value is None:
+            return None
+
+        try:
+            return Decimal(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_route(
+        price_route: dict[str, Any],
+    ) -> str | None:
+        """Extract a compact route description."""
+
+        best_route = price_route.get("bestRoute")
+
+        if not isinstance(best_route, list):
+            return None
+
+        names: list[str] = []
+
+        def collect_names(
+            value: Any,
+        ) -> None:
+            if isinstance(value, dict):
+                exchange = value.get("exchange")
+
+                if exchange:
+                    names.append(str(exchange))
+
+                pool = value.get("pool")
+
+                if pool:
+                    names.append(str(pool))
+
+                for nested in value.values():
+                    collect_names(nested)
+
+            elif isinstance(value, list):
+                for item in value:
+                    collect_names(item)
+
+        collect_names(best_route)
+
+        if not names:
+            return None
+
+        unique_names = list(
+            dict.fromkeys(names)
+        )
+
+        return " → ".join(unique_names)
