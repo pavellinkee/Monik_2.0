@@ -29,6 +29,15 @@ def create_config(
 ) -> AggregatorConfig:
     """Create a test aggregator configuration."""
 
+    standard_interval = (
+        60.0 / requests_per_minute
+    )
+
+    max_interval = max(
+        5.0,
+        standard_interval * 2,
+    )
+
     return AggregatorConfig(
         enabled=enabled,
         api_key=None,
@@ -37,7 +46,7 @@ def create_config(
             initial_delay_seconds=initial_delay,
             adaptive_delay_enabled=True,
             delay_multiplier=1.5,
-            max_delay_seconds=1.0,
+            max_delay_seconds=max_interval,
         ),
     )
 
@@ -184,7 +193,7 @@ def test_manager_creates_one_queue():
     )
 
     assert queue._rate_limiter.standard_interval == pytest.approx(
-        0.01
+        1.2
     )
 
 
