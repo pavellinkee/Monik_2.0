@@ -1,4 +1,3 @@
-cat > tests/test_net_profit_calculator.py <<'PY'
 from decimal import Decimal
 
 import pytest
@@ -194,4 +193,3 @@ async def test_rejects_different_chains():
             opportunity=opportunity,
             gas_cost=make_gas_cost(chain_id=137),
         )
-PY

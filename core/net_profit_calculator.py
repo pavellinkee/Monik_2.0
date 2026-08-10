@@ -1,4 +1,3 @@
-cat > core/net_profit_calculator.py <<'PY'
 """
 Net profit calculator.
 
@@ -130,4 +129,3 @@ class NetProfitCalculator:
             opportunity=opportunity,
             gas_cost=gas_cost,
         )
-PY
