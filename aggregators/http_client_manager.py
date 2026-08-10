@@ -8,20 +8,25 @@ Rules:
     - One manager can own multiple named HTTP clients.
     - Clients can be created lazily.
     - Existing clients are reused.
+    - Only enabled aggregators receive HTTP clients.
     - All clients can be started and stopped centrally.
-    - Aggregator-specific rate limiting is NOT handled here.
+    - HTTP transport settings are kept separate from
+      aggregator-specific API credentials.
+    - Aggregator-specific rate limits are handled elsewhere.
 
 Does NOT:
     - make scanner decisions;
     - apply aggregator-specific rate limits;
     - manage request priority;
     - interpret aggregator responses;
-    - know about Stage 1 or Stage 2.
+    - know about Stage 1 or Stage 2;
+    - store or transmit API keys.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 from aggregators.http_client import HttpClient
 
@@ -139,6 +144,55 @@ class HttpClientManager:
         self._clients[name] = client
 
         return client
+
+    def create_for_aggregators(
+        self,
+        aggregators: Mapping[str, Any],
+    ) -> None:
+        """
+        Create one HTTP client for every enabled aggregator.
+
+        The method accepts the aggregator configuration mapping
+        from ScannerConfig.
+
+        Only the following configuration property is required:
+
+            enabled
+
+        API keys and rate-limit settings are intentionally ignored.
+        They belong to higher-level aggregator components.
+        """
+
+        if not isinstance(
+            aggregators,
+            Mapping,
+        ):
+            raise TypeError(
+                "aggregators must be a mapping."
+            )
+
+        for name, config in aggregators.items():
+            self._validate_name(name)
+
+            enabled = getattr(
+                config,
+                "enabled",
+                None,
+            )
+
+            if enabled is None:
+                raise ValueError(
+                    f"Aggregator '{name}' configuration "
+                    f"does not provide 'enabled'."
+                )
+
+            if not enabled:
+                continue
+
+            if self.contains(name):
+                continue
+
+            self.create(name)
 
     def get(
         self,
