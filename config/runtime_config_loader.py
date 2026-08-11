@@ -3,10 +3,10 @@ Runtime configuration loader.
 
 Supports both:
 
-1. the existing user-facing ScannerConfig structure;
-2. the normalized runtime dictionary structure.
+1. the current normalized flat configuration;
+2. the existing nested user configuration.
 
-The existing config/user_config.yaml format is preserved.
+The user-facing YAML structure is never required to change.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from config.runtime_config import RuntimeConfig
 
 class RuntimeConfigLoader:
     """
-    Converts configuration data into RuntimeConfig.
+    Convert raw configuration into RuntimeConfig.
     """
 
     def load(
@@ -28,8 +28,7 @@ class RuntimeConfigLoader:
         data: Mapping[str, Any],
     ) -> RuntimeConfig:
         """
-        Normalize either the existing nested configuration
-        or the newer flat runtime configuration.
+        Load either flat or legacy nested configuration.
         """
 
         if not isinstance(
@@ -40,10 +39,52 @@ class RuntimeConfigLoader:
                 "data must be a mapping."
             )
 
-        # ---------------------------------------------------------
-        # Existing configuration format
-        # ---------------------------------------------------------
+        if self._is_nested_config(data):
+            return self._from_nested_config(
+                data
+            )
 
+        return self._from_flat_config(
+            data
+        )
+
+    def from_dict(
+        self,
+        data: Mapping[str, Any],
+    ) -> RuntimeConfig:
+        """
+        Compatibility alias.
+        """
+
+        return self.load(data)
+
+    @staticmethod
+    def _is_nested_config(
+        data: Mapping[str, Any],
+    ) -> bool:
+        """
+        Detect the existing user-facing YAML format.
+        """
+
+        return (
+            isinstance(
+                data.get("stage1"),
+                Mapping,
+            )
+            or isinstance(
+                data.get("stage2"),
+                Mapping,
+            )
+            or isinstance(
+                data.get("aggregators"),
+                Mapping,
+            )
+        )
+
+    def _from_nested_config(
+        self,
+        data: Mapping[str, Any],
+    ) -> RuntimeConfig:
         stage1 = data.get(
             "stage1",
             {},
@@ -59,48 +100,30 @@ class RuntimeConfigLoader:
             {},
         )
 
-        if (
-            isinstance(stage1, Mapping)
-            and isinstance(stage2, Mapping)
-            and isinstance(aggregators, Mapping)
-            and (
-                "amount_usdt" in stage1
-                or "base_interval_minutes" in stage1
-            )
+        if not isinstance(
+            stage1,
+            Mapping,
         ):
-            return self._from_existing_config(
-                stage1=stage1,
-                stage2=stage2,
-                aggregators=aggregators,
-                data=data,
+            raise TypeError(
+                "stage1 configuration must be a mapping."
             )
 
-        # ---------------------------------------------------------
-        # Normalized runtime format
-        # ---------------------------------------------------------
+        if not isinstance(
+            stage2,
+            Mapping,
+        ):
+            raise TypeError(
+                "stage2 configuration must be a mapping."
+            )
 
-        return self._from_runtime_config(
-            data
-        )
+        if not isinstance(
+            aggregators,
+            Mapping,
+        ):
+            raise TypeError(
+                "aggregators configuration must be a mapping."
+            )
 
-    def from_dict(
-        self,
-        data: Mapping[str, Any],
-    ) -> RuntimeConfig:
-        """
-        Compatibility alias.
-        """
-
-        return self.load(data)
-
-    def _from_existing_config(
-        self,
-        *,
-        stage1: Mapping[str, Any],
-        stage2: Mapping[str, Any],
-        aggregators: Mapping[str, Any],
-        data: Mapping[str, Any],
-    ) -> RuntimeConfig:
         enabled_aggregators = tuple(
             str(name)
             for name, config
@@ -130,28 +153,64 @@ class RuntimeConfigLoader:
 
         if amount <= 0:
             raise ValueError(
-                "stage1.amount_usdt must be greater than zero."
+                "stage1.amount_usdt must be "
+                "greater than zero."
             )
 
-        base_interval_minutes = float(
+        interval_minutes = float(
             stage1.get(
                 "base_interval_minutes",
-                10,
+                10.0,
             )
         )
 
-        if base_interval_minutes <= 0:
+        if interval_minutes <= 0:
             raise ValueError(
                 "stage1.base_interval_minutes must "
                 "be greater than zero."
             )
 
-        stage2_enabled = bool(
-            stage2.get(
-                "enabled",
-                True,
+        max_interval_minutes = float(
+            stage1.get(
+                "max_interval_minutes",
+                interval_minutes,
             )
         )
+
+        if max_interval_minutes < interval_minutes:
+            raise ValueError(
+                "stage1.max_interval_minutes cannot "
+                "be smaller than base_interval_minutes."
+            )
+
+        api_budgets: dict[str, int] = {}
+
+        for name, config in aggregators.items():
+            if not isinstance(
+                config,
+                Mapping,
+            ):
+                continue
+
+            rate_limit = config.get(
+                "rate_limit",
+                {},
+            )
+
+            if not isinstance(
+                rate_limit,
+                Mapping,
+            ):
+                continue
+
+            limit = rate_limit.get(
+                "requests_per_minute"
+            )
+
+            if limit is not None:
+                api_budgets[
+                    str(name)
+                ] = int(limit)
 
         return RuntimeConfig(
             enabled_aggregators=(
@@ -162,21 +221,32 @@ class RuntimeConfigLoader:
             ),
             chain_ids=tuple(
                 int(chain_id)
-                for chain_id in data.get(
+                for chain_id
+                in data.get(
                     "chain_ids",
                     (),
                 )
             ),
             stage1_interval_seconds=(
-                base_interval_minutes * 60.0
+                interval_minutes * 60.0
             ),
-            stage1_max_tokens=int(
-                data.get(
-                    "stage1_max_tokens",
-                    30,
+            stage1_max_tokens=(
+                None
+                if data.get(
+                    "stage1_max_tokens"
+                ) is None
+                else int(
+                    data.get(
+                        "stage1_max_tokens"
+                    )
                 )
             ),
-            stage2_enabled=stage2_enabled,
+            stage2_enabled=bool(
+                stage2.get(
+                    "enabled",
+                    True,
+                )
+            ),
             stage2_max_concurrent_checks=int(
                 stage2.get(
                     "max_concurrent_checks",
@@ -201,23 +271,15 @@ class RuntimeConfigLoader:
                     True,
                 )
             ),
-            api_budget_per_aggregator={
-                str(name): int(
-                    config.get(
-                        "rate_limit",
-                        {},
-                    ).get(
-                        "requests_per_minute",
-                        0,
-                    )
+            api_budget_per_aggregator=(
+                api_budgets
+            ),
+            stage2_reserved_api_capacity=int(
+                data.get(
+                    "stage2_reserved_api_capacity",
+                    0,
                 )
-                for name, config
-                in aggregators.items()
-                if isinstance(
-                    config,
-                    Mapping,
-                )
-            },
+            ),
             telegram_enabled=bool(
                 data.get(
                     "telegram_enabled",
@@ -232,13 +294,14 @@ class RuntimeConfigLoader:
             ),
         )
 
-    def _from_runtime_config(
+    def _from_flat_config(
         self,
         data: Mapping[str, Any],
     ) -> RuntimeConfig:
         enabled_aggregators = tuple(
             str(name)
-            for name in data.get(
+            for name
+            in data.get(
                 "enabled_aggregators",
                 (),
             )
@@ -257,10 +320,13 @@ class RuntimeConfigLoader:
             enabled_aggregators=(
                 enabled_aggregators
             ),
-            scan_amounts_usdt=amounts,
+            scan_amounts_usdt=(
+                amounts
+            ),
             chain_ids=tuple(
-                int(chain)
-                for chain in data.get(
+                int(chain_id)
+                for chain_id
+                in data.get(
                     "chain_ids",
                     (),
                 )
