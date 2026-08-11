@@ -1,21 +1,13 @@
 """
 SQL opportunity repository.
 
-Responsibility:
-    Persist profitable arbitrage opportunities through the
-    existing DatabaseInterface.
+Persists only validated profitable opportunities.
 
 Compatibility:
-    - works with the existing DatabaseInterface;
-    - works with SQLiteDatabase;
-    - preserves OpportunityRepository;
-    - preserves legacy store() alias.
-
-The repository does NOT:
-    - calculate profitability;
-    - validate opportunities;
-    - send Telegram messages;
-    - make aggregator requests.
+    - OpportunityRepository contract;
+    - DatabaseInterface;
+    - SQLiteDatabase;
+    - legacy store().
 """
 
 from __future__ import annotations
@@ -32,7 +24,7 @@ class SqlOpportunityRepository(
     OpportunityRepository
 ):
     """
-    Database-backed opportunity repository.
+    SQL-backed opportunity repository.
     """
 
     def __init__(
@@ -51,31 +43,12 @@ class SqlOpportunityRepository(
         result: NetProfitResult,
     ) -> None:
         """
-        Persist one profitable opportunity.
+        Save one profitable opportunity.
         """
 
         self._validate_result(
             result
         )
-
-        await self._save_without_commit(
-            result
-        )
-
-        await self._database.commit()
-
-    async def _save_without_commit(
-        self,
-        result: NetProfitResult,
-    ) -> None:
-        """
-        Persist one result without committing.
-
-        Used internally by save_many() so that a batch is committed
-        once instead of once per opportunity.
-        """
-
-        opportunity = result.opportunity
 
         await self._database.execute(
             """
@@ -93,13 +66,13 @@ class SqlOpportunityRepository(
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            opportunity.chain_id,
-            opportunity.base_symbol,
-            opportunity.target_symbol,
-            opportunity.buy_aggregator,
-            opportunity.sell_aggregator,
+            result.opportunity.chain_id,
+            result.opportunity.base_symbol,
+            result.opportunity.target_symbol,
+            result.opportunity.buy_aggregator,
+            result.opportunity.sell_aggregator,
             str(
-                opportunity.amount_usdt
+                result.opportunity.amount_usdt
             ),
             str(
                 result.gross_profit_usdt
@@ -115,23 +88,19 @@ class SqlOpportunityRepository(
             ),
         )
 
+        await self._database.commit()
+
     async def save_many(
         self,
         results: Iterable[NetProfitResult],
     ) -> int:
         """
-        Persist multiple profitable results.
-
-        Returns:
-            Number of stored opportunities.
+        Save all profitable results and commit once.
         """
 
         items = tuple(
             results
         )
-
-        if not items:
-            return 0
 
         stored = 0
 
@@ -143,8 +112,42 @@ class SqlOpportunityRepository(
             if not result.is_profitable:
                 continue
 
-            await self._save_without_commit(
-                result
+            await self._database.execute(
+                """
+                INSERT INTO opportunities (
+                    chain_id,
+                    base_symbol,
+                    target_symbol,
+                    buy_aggregator,
+                    sell_aggregator,
+                    amount_usdt,
+                    gross_profit_usdt,
+                    gas_cost_usdt,
+                    net_profit_usdt,
+                    net_profit_percent
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                result.opportunity.chain_id,
+                result.opportunity.base_symbol,
+                result.opportunity.target_symbol,
+                result.opportunity.buy_aggregator,
+                result.opportunity.sell_aggregator,
+                str(
+                    result.opportunity.amount_usdt
+                ),
+                str(
+                    result.gross_profit_usdt
+                ),
+                str(
+                    result.gas_cost_usdt
+                ),
+                str(
+                    result.net_profit_usdt
+                ),
+                str(
+                    result.net_profit_percent
+                ),
             )
 
             stored += 1
@@ -166,8 +169,6 @@ class SqlOpportunityRepository(
             result
         )
 
-        opportunity = result.opportunity
-
         row = await self._database.fetch_one(
             """
             SELECT 1
@@ -181,13 +182,13 @@ class SqlOpportunityRepository(
               AND net_profit_usdt = ?
             LIMIT 1
             """,
-            opportunity.chain_id,
-            opportunity.base_symbol,
-            opportunity.target_symbol,
-            opportunity.buy_aggregator,
-            opportunity.sell_aggregator,
+            result.opportunity.chain_id,
+            result.opportunity.base_symbol,
+            result.opportunity.target_symbol,
+            result.opportunity.buy_aggregator,
+            result.opportunity.sell_aggregator,
             str(
-                opportunity.amount_usdt
+                result.opportunity.amount_usdt
             ),
             str(
                 result.net_profit_usdt
@@ -201,6 +202,8 @@ class SqlOpportunityRepository(
     ) -> int:
         """
         Return number of stored opportunities.
+
+        SQLiteDatabase returns tuple-like rows.
         """
 
         row = await self._database.fetch_one(
@@ -213,7 +216,6 @@ class SqlOpportunityRepository(
         if row is None:
             return 0
 
-        # SQLiteDatabase returns tuple-like rows.
         return int(
             row[0]
         )
@@ -223,7 +225,7 @@ class SqlOpportunityRepository(
         result: NetProfitResult,
     ) -> None:
         """
-        Legacy compatibility alias for save().
+        Legacy compatibility alias.
         """
 
         await self.save(
@@ -234,10 +236,6 @@ class SqlOpportunityRepository(
     def _validate_result(
         result: NetProfitResult,
     ) -> None:
-        """
-        Validate repository input.
-        """
-
         if not isinstance(
             result,
             NetProfitResult,
