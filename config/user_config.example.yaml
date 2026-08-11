@@ -1,0 +1,41 @@
+# Monik 2.0 user configuration
+#
+# Copy this file to:
+#     config/user_config.yaml
+#
+# Do not put API secrets into GitHub.
+
+enabled_aggregators:
+  - "1inch"
+  - "0x"
+  - "uniswap"
+  - "velora"
+
+chain_ids:
+  - 1
+  - 137
+
+scan_amounts_usdt:
+  - "100"
+  - "500"
+  - "1000"
+
+stage1_interval_seconds: 600
+
+stage2_max_concurrent_checks: 1
+
+stage2_priority: true
+
+stage2_reserved_api_capacity: 2
+
+api_budget_per_aggregator:
+  "1inch": 100
+  "0x": 100
+  "uniswap": 100
+  "velora": 100
+
+telegram_enabled: false
+
+telegram_bot_token: null
+
+telegram_chat_id: null
