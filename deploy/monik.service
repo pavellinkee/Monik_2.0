@@ -1,0 +1,24 @@
+[Unit]
+Description=Monik 2.0 DEX Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/opt/monik
+
+EnvironmentFile=/opt/monik/.env
+
+ExecStart=/opt/monik/.venv/bin/python -m main
+
+Restart=always
+RestartSec=10
+
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
