@@ -1,16 +1,22 @@
 """
-Full scanner cycle.
+Direct full scanner cycle.
 
 Responsibility:
     Execute one complete Stage 1 → Stage 2 → validation →
-    profitability cycle.
+    profitability cycle when explicitly requested.
 
-The cycle does not own:
-    - scheduling;
-    - API rate limits;
-    - aggregator queues;
-    - SQL implementation;
-    - Telegram transport.
+Important:
+    This class is NOT the production scheduler.
+
+Production scheduling is owned exclusively by ScanCoordinator.
+
+This class is useful for:
+    - integration tests;
+    - manual single-cycle execution;
+    - development;
+    - deterministic direct execution.
+
+It does not run continuously.
 """
 
 from __future__ import annotations
@@ -27,14 +33,20 @@ from core.profitability_filter import (
 from core.profitability_pipeline import (
     ProfitabilityPipeline,
 )
-from core.stage_runtime import StageRuntime
-from models.net_profit import NetProfitResult
-from models.stage2_scan import Stage2ScanResult
+from core.stage_runtime import (
+    StageRuntime,
+)
+from models.net_profit import (
+    NetProfitResult,
+)
+from models.stage2_scan import (
+    Stage2ScanResult,
+)
 
 
 class FullScanCycle:
     """
-    Executes one complete scanner cycle.
+    Direct, non-scheduled full scan.
     """
 
     def __init__(
@@ -48,11 +60,51 @@ class FullScanCycle:
         scan_amounts_usdt: Iterable[Decimal],
         max_tokens: int | None = None,
     ) -> None:
-        self._stage_runtime = stage_runtime
+        if not isinstance(
+            stage_runtime,
+            StageRuntime,
+        ):
+            raise TypeError(
+                "stage_runtime must be a StageRuntime."
+            )
+
+        if not isinstance(
+            profitability_pipeline,
+            ProfitabilityPipeline,
+        ):
+            raise TypeError(
+                "profitability_pipeline must be a "
+                "ProfitabilityPipeline."
+            )
+
+        if not isinstance(
+            validator,
+            OpportunityValidator,
+        ):
+            raise TypeError(
+                "validator must be an "
+                "OpportunityValidator."
+            )
+
+        if not isinstance(
+            profitability_filter,
+            ProfitabilityFilter,
+        ):
+            raise TypeError(
+                "profitability_filter must be a "
+                "ProfitabilityFilter."
+            )
+
+        self._stage_runtime = (
+            stage_runtime
+        )
+
         self._profitability_pipeline = (
             profitability_pipeline
         )
+
         self._validator = validator
+
         self._profitability_filter = (
             profitability_filter
         )
@@ -64,7 +116,8 @@ class FullScanCycle:
 
         self._amounts = tuple(
             Decimal(str(amount))
-            for amount in scan_amounts_usdt
+            for amount
+            in scan_amounts_usdt
         )
 
         self._max_tokens = max_tokens
@@ -83,8 +136,9 @@ class FullScanCycle:
         self,
     ) -> tuple[NetProfitResult, ...]:
         """
-        Execute Stage 1 and Stage 2 for all configured
-        chain/amount combinations.
+        Execute one direct scan.
+
+        This method intentionally does not use ScanCoordinator.
         """
 
         stage1_results = []
@@ -130,8 +184,10 @@ class FullScanCycle:
             )
         )
 
-        return self._profitability_filter.filter_results(
-            net_results
+        return (
+            self._profitability_filter.filter_results(
+                net_results
+            )
         )
 
     async def execute(
@@ -143,15 +199,26 @@ class FullScanCycle:
 
         return await self.run()
 
+    async def scan(
+        self,
+    ) -> tuple[NetProfitResult, ...]:
+        """
+        Compatibility alias for direct execution.
+        """
+
+        return await self.run()
+
     def _validate_results(
         self,
         results: Iterable[Stage2ScanResult],
     ) -> tuple[Stage2ScanResult, ...]:
         """
-        Apply integrity and consensus validation.
+        Apply the existing validation layer.
         """
 
-        items = tuple(results)
+        items = tuple(
+            results
+        )
 
         validated = []
 
@@ -165,10 +232,13 @@ class FullScanCycle:
 
             if all(
                 validation.valid
-                for validation in validations
+                for validation
+                in validations
             ):
                 validated.append(
                     result
                 )
 
-        return tuple(validated)
+        return tuple(
+            validated
+        )
