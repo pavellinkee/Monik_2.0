@@ -1,31 +1,28 @@
 """
 Normalized runtime configuration.
 
-This model is an internal representation of the existing
-ScannerConfig.
-
-Important:
-    The user-facing YAML format remains unchanged.
-
-The runtime layer may additionally receive chain_ids from the
-token/database layer. They are therefore optional here.
+The user-facing YAML format is intentionally kept separate from
+this internal runtime representation.
 
 Compatibility:
-    - preserves the existing ScannerConfig structure;
-    - supports the newer normalized runtime representation;
-    - does not require users to rewrite user_config.yaml.
+    - current normalized configuration;
+    - legacy ScannerConfig-style configuration;
+    - single scan amount;
+    - multiple scan amounts.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
 
+from pydantic import Field
+
 from models.base_model import BaseModel
 
 
 class RuntimeConfig(BaseModel):
     """
-    Normalized configuration used by runtime components.
+    Immutable normalized runtime configuration.
     """
 
     enabled_aggregators: tuple[str, ...]
@@ -48,7 +45,9 @@ class RuntimeConfig(BaseModel):
 
     stage2_priority: bool = True
 
-    api_budget_per_aggregator: dict[str, int] = {}
+    api_budget_per_aggregator: dict[str, int] = Field(
+        default_factory=dict
+    )
 
     stage2_reserved_api_capacity: int = 0
 
@@ -62,31 +61,36 @@ class RuntimeConfig(BaseModel):
     def amount_usdt(self) -> Decimal:
         """
         Legacy single-amount interface.
-
-        Returns the first configured scan amount.
         """
+
+        if not self.scan_amounts_usdt:
+            raise ValueError(
+                "No scan amounts are configured."
+            )
 
         return self.scan_amounts_usdt[0]
 
     @property
     def stage1_interval_minutes(self) -> float:
         """
-        Compatibility helper for the user configuration model.
+        Return Stage 1 interval in minutes.
         """
 
-        return self.stage1_interval_seconds / 60.0
+        return (
+            self.stage1_interval_seconds / 60.0
+        )
 
     @property
     def aggregators(self) -> tuple[str, ...]:
         """
-        Compatibility alias.
+        Legacy alias for enabled aggregators.
         """
 
         return self.enabled_aggregators
 
     def has_chain_configuration(self) -> bool:
         """
-        Return True when explicit chain IDs are configured.
+        Return True when chains are explicitly configured.
         """
 
         return bool(self.chain_ids)
