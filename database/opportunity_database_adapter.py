@@ -1,11 +1,8 @@
 """
-Database adapter for opportunity persistence.
+Database compatibility adapter.
 
-Responsibility:
-    Adapt the existing DatabaseInterface to the
-    OpportunityRepository database contract.
-
-The adapter does not create a second database abstraction.
+Adapts DatabaseInterface without introducing a second
+database contract.
 """
 
 from __future__ import annotations
@@ -13,7 +10,7 @@ from __future__ import annotations
 
 class OpportunityDatabaseAdapter:
     """
-    Compatibility adapter around the existing database object.
+    Adapter for the existing DatabaseInterface.
     """
 
     def __init__(
@@ -33,26 +30,10 @@ class OpportunityDatabaseAdapter:
         *parameters,
     ):
         """
-        Delegate SQL execution.
-
-        Parameters are expanded because the existing
-        DatabaseInterface uses execute(query, *args).
+        Delegate execute() using the existing positional API.
         """
 
-        method = getattr(
-            self._database,
-            "execute",
-            None,
-        )
-
-        if not callable(
-            method
-        ):
-            raise AttributeError(
-                "Database must provide execute()."
-            )
-
-        result = method(
+        result = self._database.execute(
             query,
             *parameters,
         )
@@ -71,23 +52,10 @@ class OpportunityDatabaseAdapter:
         *parameters,
     ):
         """
-        Delegate single-row retrieval.
+        Delegate fetch_one().
         """
 
-        method = getattr(
-            self._database,
-            "fetch_one",
-            None,
-        )
-
-        if not callable(
-            method
-        ):
-            raise AttributeError(
-                "Database must provide fetch_one()."
-            )
-
-        result = method(
+        result = self._database.fetch_one(
             query,
             *parameters,
         )
@@ -106,23 +74,10 @@ class OpportunityDatabaseAdapter:
         *parameters,
     ):
         """
-        Delegate multi-row retrieval.
+        Delegate fetch_all().
         """
 
-        method = getattr(
-            self._database,
-            "fetch_all",
-            None,
-        )
-
-        if not callable(
-            method
-        ):
-            raise AttributeError(
-                "Database must provide fetch_all()."
-            )
-
-        result = method(
+        result = self._database.fetch_all(
             query,
             *parameters,
         )
@@ -139,23 +94,10 @@ class OpportunityDatabaseAdapter:
         self,
     ) -> None:
         """
-        Delegate transaction commit.
+        Delegate commit().
         """
 
-        method = getattr(
-            self._database,
-            "commit",
-            None,
-        )
-
-        if not callable(
-            method
-        ):
-            raise AttributeError(
-                "Database must provide commit()."
-            )
-
-        result = method()
+        result = self._database.commit()
 
         if hasattr(
             result,
@@ -167,11 +109,7 @@ class OpportunityDatabaseAdapter:
         self,
     ) -> None:
         """
-        Close the underlying database.
-
-        Supports both:
-            disconnect()
-            close()
+        Support both current disconnect() and legacy close().
         """
 
         disconnect = getattr(
