@@ -2,18 +2,29 @@
 User configuration models.
 
 Responsibility:
-    Defines and validates all user-configurable settings.
+    Define and validate all user-editable scanner settings.
 
 Compatibility:
-    - legacy single amount: amount_usdt
-    - new multiple amounts: scan_amounts_usdt
+    - preserves the original stage1.amount_usdt interface;
+    - preserves the original Stage 1 / Stage 2 configuration;
+    - adds multi-amount scanning;
+    - adds network selection;
+    - adds scanner concurrency controls;
+    - adds Telegram notification configuration;
+    - adds notification deduplication settings.
 
-The legacy interface remains valid.
+This module does not:
+    - load YAML;
+    - perform HTTP requests;
+    - create aggregators;
+    - scan;
+    - access the database.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -49,24 +60,9 @@ class AggregatorRateLimitConfig(BaseModel):
         gt=0
     )
 
-    @field_validator(
-        "max_delay_seconds"
-    )
-    @classmethod
-    def validate_max_delay(
-        cls,
-        value: float,
-    ) -> float:
-        if value <= 0:
-            raise ValueError(
-                "max_delay_seconds must be greater than 0."
-            )
-
-        return value
-
 
 class AggregatorConfig(BaseModel):
-    """Configuration for one aggregator."""
+    """Configuration for one DEX aggregator."""
 
     model_config = ConfigDict(
         extra="forbid"
@@ -84,13 +80,12 @@ class Stage1Config(BaseModel):
     Stage 1 scanning settings.
 
     amount_usdt:
-        Legacy single scan amount.
+        Original single-amount interface.
 
     scan_amounts_usdt:
-        Preferred multi-amount interface.
+        New multi-amount interface.
 
-    When only amount_usdt is provided, it is automatically converted
-    into a one-item scan_amounts_usdt tuple.
+    When scan_amounts_usdt is omitted, amount_usdt is used.
     """
 
     model_config = ConfigDict(
@@ -103,7 +98,7 @@ class Stage1Config(BaseModel):
 
     scan_amounts_usdt: tuple[
         Decimal,
-        ...,
+        ...
     ] | None = None
 
     base_interval_minutes: int = Field(
@@ -120,21 +115,6 @@ class Stage1Config(BaseModel):
     )
 
     @field_validator(
-        "max_interval_minutes"
-    )
-    @classmethod
-    def validate_max_interval(
-        cls,
-        value: int,
-    ) -> int:
-        if value <= 0:
-            raise ValueError(
-                "max_interval_minutes must be greater than 0."
-            )
-
-        return value
-
-    @field_validator(
         "scan_amounts_usdt"
     )
     @classmethod
@@ -142,7 +122,7 @@ class Stage1Config(BaseModel):
         cls,
         value: tuple[
             Decimal,
-            ...,
+            ...
         ]
         | None,
     ):
@@ -165,12 +145,12 @@ class Stage1Config(BaseModel):
     @model_validator(
         mode="after"
     )
-    def normalize_scan_amounts(
+    def normalize_amounts(
         self,
     ):
         """
-        Preserve the legacy amount_usdt interface while creating
-        the normalized multi-amount representation.
+        Keep the legacy amount_usdt interface while exposing
+        normalized multiple amounts.
         """
 
         if self.scan_amounts_usdt is None:
@@ -189,13 +169,34 @@ class Stage1Config(BaseModel):
                 self.scan_amounts_usdt[0],
             )
 
+        if (
+            self.max_interval_minutes
+            < self.base_interval_minutes
+        ):
+            raise ValueError(
+                "max_interval_minutes cannot be "
+                "less than base_interval_minutes."
+            )
+
         return self
+
+    @property
+    def amounts_usdt(
+        self,
+    ) -> tuple[Decimal, ...]:
+        """
+        Return normalized scan amounts.
+        """
+
+        return self.scan_amounts_usdt or (
+            self.amount_usdt,
+        )
 
     def validate_intervals(
         self,
     ) -> None:
         """
-        Ensure maximum interval is not below base interval.
+        Legacy validation interface.
         """
 
         if (
@@ -206,18 +207,6 @@ class Stage1Config(BaseModel):
                 "max_interval_minutes cannot be "
                 "less than base_interval_minutes."
             )
-
-    @property
-    def amounts_usdt(
-        self,
-    ) -> tuple[Decimal, ...]:
-        """
-        Preferred normalized multi-amount interface.
-        """
-
-        return self.scan_amounts_usdt or (
-            self.amount_usdt,
-        )
 
 
 class Stage2Config(BaseModel):
@@ -240,8 +229,165 @@ class Stage2Config(BaseModel):
     priority_over_stage1: bool = True
 
 
+class NetworkConfig(BaseModel):
+    """
+    Blockchain network selection.
+
+    mode:
+        auto:
+            discover networks from available token addresses.
+
+        whitelist:
+            use only chain_ids.
+
+    No network IDs are hardcoded in application code.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+    mode: Literal[
+        "auto",
+        "whitelist",
+    ] = "auto"
+
+    chain_ids: tuple[int, ...] = ()
+
+    @field_validator(
+        "chain_ids"
+    )
+    @classmethod
+    def validate_chain_ids(
+        cls,
+        value: tuple[int, ...],
+    ):
+        for chain_id in value:
+            if chain_id <= 0:
+                raise ValueError(
+                    "chain_ids must contain only "
+                    "positive integers."
+                )
+
+        return tuple(
+            dict.fromkeys(value)
+        )
+
+    @model_validator(
+        mode="after"
+    )
+    def validate_mode(
+        self,
+    ):
+        if (
+            self.mode == "whitelist"
+            and not self.chain_ids
+        ):
+            raise ValueError(
+                "network.chain_ids must not be empty "
+                "when network.mode is 'whitelist'."
+            )
+
+        return self
+
+
+class ScannerRuntimeConfig(BaseModel):
+    """
+    Global scan scheduler limits.
+
+    These settings control scanner-level concurrency.
+
+    Aggregator-specific request concurrency and rate limiting
+    remain inside AggregatorRequestQueue.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+    max_parallel_chain_amount_jobs: int = Field(
+        default=4,
+        gt=0,
+    )
+
+    stage2_batch_size: int = Field(
+        default=1,
+        gt=0,
+    )
+
+    no_cache: bool = True
+
+
+class TelegramConfig(BaseModel):
+    """Telegram notification configuration."""
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+    enabled: bool = False
+
+    bot_token: str | None = None
+
+    chat_id: str | None = None
+
+    timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+    )
+
+    send_best_only: bool = True
+
+    include_all_profitable: bool = False
+
+    test_message_enabled: bool = True
+
+    @model_validator(
+        mode="after"
+    )
+    def validate_credentials(
+        self,
+    ):
+        if self.enabled:
+            if not self.bot_token:
+                raise ValueError(
+                    "telegram.bot_token is required "
+                    "when Telegram is enabled."
+                )
+
+            if not self.chat_id:
+                raise ValueError(
+                    "telegram.chat_id is required "
+                    "when Telegram is enabled."
+                )
+
+        return self
+
+
+class NotificationConfig(BaseModel):
+    """Notification selection and deduplication settings."""
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+    deduplication_enabled: bool = True
+
+    deduplication_window_seconds: int = Field(
+        default=900,
+        gt=0,
+    )
+
+    best_opportunity_marker: str = "💎"
+
+    minimum_display_profit_usdt: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+    )
+
+
 class ScannerConfig(BaseModel):
-    """Global scanner configuration."""
+    """Complete user configuration."""
 
     model_config = ConfigDict(
         extra="forbid"
@@ -256,11 +402,27 @@ class ScannerConfig(BaseModel):
         AggregatorConfig,
     ]
 
+    network: NetworkConfig = Field(
+        default_factory=NetworkConfig
+    )
+
+    scanner: ScannerRuntimeConfig = Field(
+        default_factory=ScannerRuntimeConfig
+    )
+
+    telegram: TelegramConfig = Field(
+        default_factory=TelegramConfig
+    )
+
+    notifications: NotificationConfig = Field(
+        default_factory=NotificationConfig
+    )
+
     def validate(
         self,
     ) -> None:
         """
-        Validate cross-section configuration rules.
+        Validate cross-section configuration.
         """
 
         self.stage1.validate_intervals()
@@ -270,14 +432,14 @@ class ScannerConfig(BaseModel):
                 "At least one aggregator must be configured."
             )
 
-        enabled_count = sum(
-            1
-            for config
-            in self.aggregators.values()
+        enabled_aggregators = tuple(
+            name
+            for name, config
+            in self.aggregators.items()
             if config.enabled
         )
 
-        if enabled_count == 0:
+        if not enabled_aggregators:
             raise ValueError(
                 "At least one aggregator must be enabled."
             )
@@ -290,3 +452,46 @@ class ScannerConfig(BaseModel):
                 "stage2.max_concurrent_checks must "
                 "be greater than zero."
             )
+
+        if (
+            self.scanner.max_parallel_chain_amount_jobs
+            <= 0
+        ):
+            raise ValueError(
+                "scanner.max_parallel_chain_amount_jobs "
+                "must be greater than zero."
+            )
+
+        if (
+            self.scanner.stage2_batch_size
+            <= 0
+        ):
+            raise ValueError(
+                "scanner.stage2_batch_size must "
+                "be greater than zero."
+            )
+
+    @property
+    def enabled_aggregators(
+        self,
+    ) -> tuple[str, ...]:
+        """
+        Return enabled aggregator names in configuration order.
+        """
+
+        return tuple(
+            name
+            for name, config
+            in self.aggregators.items()
+            if config.enabled
+        )
+
+    @property
+    def scan_amounts_usdt(
+        self,
+    ) -> tuple[Decimal, ...]:
+        """
+        Return normalized scan amounts.
+        """
+
+        return self.stage1.amounts_usdt
