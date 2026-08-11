@@ -2,92 +2,175 @@
 Coordinator runtime adapter.
 
 Responsibility:
-    Provide zero-argument runners required by ScanCoordinator
-    while keeping the real scan configuration inside the runtime.
+    Connect the existing ScanCoordinator with the real Stage 1
+    and Stage 2 engines.
 
-Stage 2 receives the pending Stage 1 results from the latest
-Stage 1 execution.
+Important scheduling rule:
+
+    Stage 2 priority applies only when Stage 2 work is pending.
+
+Therefore:
+    - first cycle creates Stage 1 work;
+    - Stage 1 results become pending Stage 2 work;
+    - next scheduling opportunity gives Stage 2 priority;
+    - Stage 1 can continue independently when allowed.
+
+The adapter does not bypass AggregatorEngine queues.
 """
 
 from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+from typing import Any
 
-from core.full_scan_cycle import FullScanCycle
+from core.stage_runtime import StageRuntime
+from core.stage2_pending_queue import (
+    Stage2PendingQueue,
+)
 
 
 class CoordinatorRuntime:
     """
-    Bridges FullScanCycle and ScanCoordinator.
+    Runtime bridge between ScanCoordinator and scanner stages.
     """
 
     def __init__(
         self,
-        cycle: FullScanCycle,
+        *,
+        stage_runtime: StageRuntime,
+        chain_ids: tuple[int, ...],
+        scan_amounts_usdt: tuple[Decimal, ...],
+        max_tokens: int | None = None,
     ) -> None:
         if not isinstance(
-            cycle,
-            FullScanCycle,
+            stage_runtime,
+            StageRuntime,
         ):
             raise TypeError(
-                "cycle must be a FullScanCycle."
+                "stage_runtime must be a StageRuntime."
             )
 
-        self._cycle = cycle
+        if not chain_ids:
+            raise ValueError(
+                "At least one chain must be configured."
+            )
 
-        self._stage1_results = ()
+        if not scan_amounts_usdt:
+            raise ValueError(
+                "At least one scan amount must be configured."
+            )
+
+        self._stage_runtime = stage_runtime
+
+        self._chain_ids = tuple(
+            chain_ids
+        )
+
+        self._scan_amounts_usdt = tuple(
+            scan_amounts_usdt
+        )
+
+        self._max_tokens = max_tokens
+
+        self._pending_stage2 = (
+            Stage2PendingQueue()
+        )
+
+        self._last_stage1_results: tuple[
+            Any,
+            ...
+        ] = ()
+
+        self._last_stage2_results: tuple[
+            Any,
+            ...
+        ] = ()
+
         self._lock = asyncio.Lock()
+
+    @property
+    def pending_stage2_count(
+        self,
+    ) -> int:
+        """
+        Return number of Stage 2 results waiting to be processed.
+        """
+
+        return self._pending_stage2.qsize()
 
     async def run_stage1(
         self,
     ):
         """
-        Execute Stage 1 and retain its results for Stage 2.
+        Execute configured Stage 1 scans.
 
-        This method intentionally delegates the actual work to
-        StageRuntime.
+        Each chain/amount combination is delegated to the
+        existing ScannerEngine.
         """
 
-        stage1_results = []
+        all_results = []
 
-        for chain_id in self._cycle._chain_ids:
-            for amount in self._cycle._amounts:
+        for chain_id in self._chain_ids:
+            for amount in self._scan_amounts_usdt:
                 results = (
-                    await self._cycle._stage_runtime.run_stage1(
+                    await self._stage_runtime.run_stage1(
                         chain_id=chain_id,
                         amount_usdt=amount,
-                        max_tokens=self._cycle._max_tokens,
+                        max_tokens=self._max_tokens,
                     )
                 )
 
-                stage1_results.extend(
+                all_results.extend(
                     results
                 )
 
+        stage1_results = tuple(
+            all_results
+        )
+
         async with self._lock:
-            self._stage1_results = tuple(
+            self._last_stage1_results = (
                 stage1_results
             )
 
-        return self._stage1_results
+        await self._pending_stage2.put_many(
+            stage1_results
+        )
+
+        return stage1_results
 
     async def run_stage2(
         self,
     ):
         """
-        Execute Stage 2 for the latest Stage 1 results.
+        Process currently pending Stage 2 work.
+
+        If no Stage 2 work is pending, this method returns an
+        empty tuple instead of making useless API requests.
         """
 
-        async with self._lock:
-            stage1_results = self._stage1_results
-
-        if not stage1_results:
+        if self._pending_stage2.empty():
             return ()
 
-        return await self._cycle._stage_runtime.run_stage2(
-            stage1_results
+        batch = self._pending_stage2.clear()
+
+        results = (
+            await self._stage_runtime.run_stage2(
+                batch
+            )
         )
+
+        stage2_results = tuple(
+            results
+        )
+
+        async with self._lock:
+            self._last_stage2_results = (
+                stage2_results
+            )
+
+        return stage2_results
 
     async def stage1(
         self,
@@ -106,3 +189,32 @@ class CoordinatorRuntime:
         """
 
         return await self.run_stage2()
+
+    async def get_last_stage1_results(
+        self,
+    ) -> tuple:
+        """
+        Return the most recent Stage 1 results.
+        """
+
+        async with self._lock:
+            return self._last_stage1_results
+
+    async def get_last_stage2_results(
+        self,
+    ) -> tuple:
+        """
+        Return the most recent Stage 2 results.
+        """
+
+        async with self._lock:
+            return self._last_stage2_results
+
+    async def shutdown(
+        self,
+    ) -> None:
+        """
+        Clear pending Stage 2 work during shutdown.
+        """
+
+        self._pending_stage2.clear()
