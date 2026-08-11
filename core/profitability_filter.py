@@ -1,10 +1,8 @@
-cat > core/profitability_filter.py <<'PY'
 """
 Profitability filter.
 
 Responsibility:
-    Keep only arbitrage opportunities whose final net profit
-    after gas costs is positive.
+    Keep only arbitrage results with positive net profit.
 
 Input:
     NetProfitResult objects.
@@ -13,15 +11,16 @@ Output:
     Tuple containing only profitable results.
 
 Does NOT:
-    - calculate profit;
     - calculate gas;
+    - calculate net profit;
     - access external APIs;
     - access the database;
+    - modify results;
     - send notifications.
 
 Compatibility:
-    Primary:
-        filter_profitable()
+    Primary interface:
+        filter_results()
 
     Legacy compatibility alias:
         filter()
@@ -36,33 +35,33 @@ from models.net_profit import NetProfitResult
 
 class ProfitabilityFilter:
     """
-    Filters final arbitrage results by net profitability.
+    Filters final arbitrage results by positive net profit.
     """
 
-    def filter_profitable(
+    def __init__(self) -> None:
+        """Create a profitability filter."""
+        pass
+
+    def filter_results(
         self,
         results: Iterable[NetProfitResult],
     ) -> tuple[NetProfitResult, ...]:
         """
         Return only results with positive net profit.
-        """
-        if isinstance(results, (str, bytes)):
-            raise TypeError(
-                "results must be an iterable of NetProfitResult."
-            )
 
-        try:
-            items = tuple(results)
-        except TypeError as exc:
-            raise TypeError(
-                "results must be an iterable of NetProfitResult."
-            ) from exc
+        Original order is preserved.
+        """
+
+        items = tuple(results)
 
         for result in items:
-            if not isinstance(result, NetProfitResult):
+            if not isinstance(
+                result,
+                NetProfitResult,
+            ):
                 raise TypeError(
-                    "every item in results must be a "
-                    "NetProfitResult."
+                    "results must contain only "
+                    "NetProfitResult objects."
                 )
 
         return tuple(
@@ -76,7 +75,7 @@ class ProfitabilityFilter:
         results: Iterable[NetProfitResult],
     ) -> tuple[NetProfitResult, ...]:
         """
-        Legacy compatibility alias for filter_profitable().
+        Legacy compatibility alias.
         """
-        return self.filter_profitable(results)
-PY
+
+        return self.filter_results(results)
