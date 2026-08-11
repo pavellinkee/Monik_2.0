@@ -4,44 +4,54 @@ User configuration models.
 Responsibility:
     Defines and validates all user-configurable settings.
 
-Does NOT:
-    - load YAML files;
-    - make HTTP requests;
-    - create aggregators;
-    - run Stage 1;
-    - run Stage 2;
-    - send Telegram messages.
+Compatibility:
+    - legacy single amount: amount_usdt
+    - new multiple amounts: scan_amounts_usdt
+
+The legacy interface remains valid.
 """
+
+from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class AggregatorRateLimitConfig(BaseModel):
     """Rate-limit settings for one aggregator."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid"
+    )
 
     requests_per_minute: int = Field(
-        gt=0,
+        gt=0
     )
 
     initial_delay_seconds: float = Field(
-        ge=0,
+        ge=0
     )
 
     adaptive_delay_enabled: bool = True
 
     delay_multiplier: float = Field(
-        gt=1.0,
+        gt=1.0
     )
 
     max_delay_seconds: float = Field(
-        gt=0,
+        gt=0
     )
 
-    @field_validator("max_delay_seconds")
+    @field_validator(
+        "max_delay_seconds"
+    )
     @classmethod
     def validate_max_delay(
         cls,
@@ -58,7 +68,9 @@ class AggregatorRateLimitConfig(BaseModel):
 class AggregatorConfig(BaseModel):
     """Configuration for one aggregator."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid"
+    )
 
     enabled: bool = True
 
@@ -68,23 +80,48 @@ class AggregatorConfig(BaseModel):
 
 
 class Stage1Config(BaseModel):
-    """Stage 1 scanning settings."""
+    """
+    Stage 1 scanning settings.
 
-    model_config = ConfigDict(extra="forbid")
+    amount_usdt:
+        Legacy single scan amount.
 
-    amount_usdt: Decimal = Field(
-        gt=0,
+    scan_amounts_usdt:
+        Preferred multi-amount interface.
+
+    When only amount_usdt is provided, it is automatically converted
+    into a one-item scan_amounts_usdt tuple.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid"
     )
 
+    amount_usdt: Decimal = Field(
+        gt=0
+    )
+
+    scan_amounts_usdt: tuple[
+        Decimal,
+        ...,
+    ] | None = None
+
     base_interval_minutes: int = Field(
-        gt=0,
+        gt=0
     )
 
     max_interval_minutes: int = Field(
+        gt=0
+    )
+
+    max_tokens: int = Field(
+        default=30,
         gt=0,
     )
 
-    @field_validator("max_interval_minutes")
+    @field_validator(
+        "max_interval_minutes"
+    )
     @classmethod
     def validate_max_interval(
         cls,
@@ -97,8 +134,69 @@ class Stage1Config(BaseModel):
 
         return value
 
-    def validate_intervals(self) -> None:
-        """Ensure the maximum interval is not below the base interval."""
+    @field_validator(
+        "scan_amounts_usdt"
+    )
+    @classmethod
+    def validate_scan_amounts(
+        cls,
+        value: tuple[
+            Decimal,
+            ...,
+        ]
+        | None,
+    ):
+        if value is None:
+            return value
+
+        if not value:
+            raise ValueError(
+                "scan_amounts_usdt cannot be empty."
+            )
+
+        for amount in value:
+            if amount <= Decimal("0"):
+                raise ValueError(
+                    "All scan amounts must be greater than zero."
+                )
+
+        return value
+
+    @model_validator(
+        mode="after"
+    )
+    def normalize_scan_amounts(
+        self,
+    ):
+        """
+        Preserve the legacy amount_usdt interface while creating
+        the normalized multi-amount representation.
+        """
+
+        if self.scan_amounts_usdt is None:
+            object.__setattr__(
+                self,
+                "scan_amounts_usdt",
+                (
+                    self.amount_usdt,
+                ),
+            )
+
+        else:
+            object.__setattr__(
+                self,
+                "amount_usdt",
+                self.scan_amounts_usdt[0],
+            )
+
+        return self
+
+    def validate_intervals(
+        self,
+    ) -> None:
+        """
+        Ensure maximum interval is not below base interval.
+        """
 
         if (
             self.max_interval_minutes
@@ -109,16 +207,30 @@ class Stage1Config(BaseModel):
                 "less than base_interval_minutes."
             )
 
+    @property
+    def amounts_usdt(
+        self,
+    ) -> tuple[Decimal, ...]:
+        """
+        Preferred normalized multi-amount interface.
+        """
+
+        return self.scan_amounts_usdt or (
+            self.amount_usdt,
+        )
+
 
 class Stage2Config(BaseModel):
     """Stage 2 opportunity verification settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid"
+    )
 
     enabled: bool = True
 
     max_concurrent_checks: int = Field(
-        gt=0,
+        gt=0
     )
 
     same_aggregator_queue_enabled: bool = True
@@ -131,7 +243,9 @@ class Stage2Config(BaseModel):
 class ScannerConfig(BaseModel):
     """Global scanner configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid"
+    )
 
     stage1: Stage1Config
 
@@ -142,11 +256,11 @@ class ScannerConfig(BaseModel):
         AggregatorConfig,
     ]
 
-    def validate(self) -> None:
+    def validate(
+        self,
+    ) -> None:
         """
         Validate cross-section configuration rules.
-
-        These rules cannot be represented by individual fields alone.
         """
 
         self.stage1.validate_intervals()
@@ -158,11 +272,21 @@ class ScannerConfig(BaseModel):
 
         enabled_count = sum(
             1
-            for config in self.aggregators.values()
+            for config
+            in self.aggregators.values()
             if config.enabled
         )
 
         if enabled_count == 0:
             raise ValueError(
                 "At least one aggregator must be enabled."
+            )
+
+        if (
+            self.stage2.max_concurrent_checks
+            <= 0
+        ):
+            raise ValueError(
+                "stage2.max_concurrent_checks must "
+                "be greater than zero."
             )
