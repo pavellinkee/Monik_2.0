@@ -2,8 +2,8 @@
 Database adapter for opportunity persistence.
 
 Responsibility:
-    Adapt the existing database implementation to the
-    SqlOpportunityRepository interface.
+    Adapt the existing DatabaseInterface to the
+    OpportunityRepository database contract.
 
 The adapter does not create a second database abstraction.
 """
@@ -30,10 +30,13 @@ class OpportunityDatabaseAdapter:
     async def execute(
         self,
         query: str,
-        parameters: tuple = (),
+        *parameters,
     ):
         """
-        Delegate SQL execution to the existing database.
+        Delegate SQL execution.
+
+        Parameters are expanded because the existing
+        DatabaseInterface uses execute(query, *args).
         """
 
         method = getattr(
@@ -42,14 +45,16 @@ class OpportunityDatabaseAdapter:
             None,
         )
 
-        if not callable(method):
+        if not callable(
+            method
+        ):
             raise AttributeError(
                 "Database must provide execute()."
             )
 
         result = method(
             query,
-            parameters,
+            *parameters,
         )
 
         if hasattr(
@@ -63,7 +68,7 @@ class OpportunityDatabaseAdapter:
     async def fetch_one(
         self,
         query: str,
-        parameters: tuple = (),
+        *parameters,
     ):
         """
         Delegate single-row retrieval.
@@ -75,60 +80,80 @@ class OpportunityDatabaseAdapter:
             None,
         )
 
-        if callable(method):
-            result = method(
-                query,
-                parameters,
+        if not callable(
+            method
+        ):
+            raise AttributeError(
+                "Database must provide fetch_one()."
             )
 
-            if hasattr(
-                result,
-                "__await__",
-            ):
-                return await result
-
-            return result
-
-        fetch_method = getattr(
-            self._database,
-            "fetchrow",
-            None,
+        result = method(
+            query,
+            *parameters,
         )
 
-        if callable(fetch_method):
-            result = fetch_method(
-                query,
-                parameters,
-            )
+        if hasattr(
+            result,
+            "__await__",
+        ):
+            return await result
 
-            if hasattr(
-                result,
-                "__await__",
-            ):
-                return await result
+        return result
 
-            return result
-
-        raise AttributeError(
-            "Database must provide fetch_one() "
-            "or fetchrow()."
-        )
-
-    async def close(
+    async def fetch_all(
         self,
-    ) -> None:
+        query: str,
+        *parameters,
+    ):
         """
-        Close the underlying database when supported.
+        Delegate multi-row retrieval.
         """
 
         method = getattr(
             self._database,
-            "close",
+            "fetch_all",
             None,
         )
 
-        if not callable(method):
-            return
+        if not callable(
+            method
+        ):
+            raise AttributeError(
+                "Database must provide fetch_all()."
+            )
+
+        result = method(
+            query,
+            *parameters,
+        )
+
+        if hasattr(
+            result,
+            "__await__",
+        ):
+            return await result
+
+        return result
+
+    async def commit(
+        self,
+    ) -> None:
+        """
+        Delegate transaction commit.
+        """
+
+        method = getattr(
+            self._database,
+            "commit",
+            None,
+        )
+
+        if not callable(
+            method
+        ):
+            raise AttributeError(
+                "Database must provide commit()."
+            )
 
         result = method()
 
@@ -137,3 +162,50 @@ class OpportunityDatabaseAdapter:
             "__await__",
         ):
             await result
+
+    async def close(
+        self,
+    ) -> None:
+        """
+        Close the underlying database.
+
+        Supports both:
+            disconnect()
+            close()
+        """
+
+        disconnect = getattr(
+            self._database,
+            "disconnect",
+            None,
+        )
+
+        if callable(
+            disconnect
+        ):
+            result = disconnect()
+
+            if hasattr(
+                result,
+                "__await__",
+            ):
+                await result
+
+            return
+
+        close = getattr(
+            self._database,
+            "close",
+            None,
+        )
+
+        if callable(
+            close
+        ):
+            result = close()
+
+            if hasattr(
+                result,
+                "__await__",
+            ):
+                await result
