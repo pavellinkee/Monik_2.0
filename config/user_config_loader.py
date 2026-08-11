@@ -1,16 +1,38 @@
 """
 User configuration loader.
 
-Loads the user-editable YAML file and delegates normalization
-to RuntimeConfigLoader.
+The existing ConfigLoader remains the authoritative validator for
+the user-facing YAML format.
+
+Flow:
+
+    YAML
+      ↓
+    ConfigLoader
+      ↓
+    ScannerConfig
+      ↓
+    RuntimeConfigLoader
+      ↓
+    RuntimeConfig
+
+This prevents two different validation rules from existing for
+the same user configuration.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from config.runtime_config import RuntimeConfig
+from config.loader import (
+    ConfigLoader,
+)
+from config.models import (
+    ScannerConfig,
+)
+from config.runtime_config import (
+    RuntimeConfig,
+)
 from config.runtime_config_loader import (
     RuntimeConfigLoader,
 )
@@ -18,13 +40,19 @@ from config.runtime_config_loader import (
 
 class UserConfigLoader:
     """
-    Load user-facing YAML configuration.
+    Load and validate the user-facing YAML configuration.
     """
 
     def __init__(
         self,
+        config_loader: ConfigLoader | None = None,
         runtime_loader: RuntimeConfigLoader | None = None,
     ) -> None:
+        self._config_loader = (
+            config_loader
+            or ConfigLoader()
+        )
+
         self._runtime_loader = (
             runtime_loader
             or RuntimeConfigLoader()
@@ -35,54 +63,24 @@ class UserConfigLoader:
         path: str | Path,
     ) -> RuntimeConfig:
         """
-        Load and normalize one YAML configuration file.
+        Load the user configuration through the authoritative
+        ScannerConfig validation pipeline.
         """
 
-        config_path = Path(
+        config = self._config_loader.load(
             path
         )
 
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Configuration file not found: "
-                f"{config_path}"
-            )
-
-        if not config_path.is_file():
-            raise ValueError(
-                f"Configuration path is not a file: "
-                f"{config_path}"
-            )
-
-        try:
-            import yaml
-        except ImportError as exc:
-            raise RuntimeError(
-                "PyYAML is required to load "
-                "user configuration."
-            ) from exc
-
-        with config_path.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
-            raw: Any = yaml.safe_load(
-                file
-            )
-
-        if raw is None:
-            raw = {}
-
         if not isinstance(
-            raw,
-            dict,
+            config,
+            ScannerConfig,
         ):
             raise TypeError(
-                "Root configuration must be a mapping."
+                "ConfigLoader must return ScannerConfig."
             )
 
         return self._runtime_loader.load(
-            raw
+            config
         )
 
     def load(
